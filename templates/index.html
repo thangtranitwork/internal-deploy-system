@@ -352,10 +352,17 @@
         async function refreshHistoryBar() {
             if (!selectedService) return;
             const res = await fetch(`/api/history/${selectedService.name}`);
-            const logs = await res.json();
             const lastDeployText = document.getElementById('last-deploy-text');
             const btnMore = document.getElementById('btn-history-more');
 
+            if (!res.ok) {
+                const err = await res.json();
+                lastDeployText.innerHTML = `<span style="color: var(--error)">Error loading history: ${err.error || 'Unknown error'}</span>`;
+                btnMore.disabled = true;
+                return;
+            }
+
+            const logs = await res.json();
             if (logs && logs.length > 0) {
                 const latest = logs[0];
                 const time = latest.created_at.substring(11, 16) + ' ' + latest.created_at.substring(8, 10) + '/' + latest.created_at.substring(5, 7);
@@ -378,6 +385,11 @@
             list.innerHTML = '<div class="shimmer" style="height: 50px"></div>'.repeat(3);
             
             const res = await fetch(`/api/history/${selectedService.name}`);
+            if (!res.ok) {
+                const err = await res.json();
+                list.innerHTML = `<div style="text-align: center; padding: 20px; color: var(--error);">Error: ${err.error || 'Failed to fetch history'}</div>`;
+                return;
+            }
             const logs = await res.json();
             
             list.innerHTML = '';
@@ -458,16 +470,19 @@
                             return;
                         }
                         const chunk = decoder.decode(value, {stream: true});
-                        const lines = chunk.split('\n\n');
-                        lines.forEach(line => {
-                            if (line.startsWith('data: ')) {
-                                const content = line.replace('data: ', '');
-                                if (content === '[EOF]') {
+                        const events = chunk.split('\n\n');
+                        events.forEach(event => {
+                            const trimmed = event.trimStart();
+                            if (trimmed.startsWith('data: ')) {
+                                const content = trimmed.slice(6);
+                                if (content.trim() === '[EOF]') {
                                     btn.disabled = false;
                                     btn.innerText = '🚀 Run Deploy';
                                     refreshHistoryBar();
                                 } else {
-                                    terminal.innerText += content;
+                                    // Add newline if missing so lines don't merge
+                                    const line = content.endsWith('\n') ? content : content + '\n';
+                                    terminal.innerText += line;
                                     terminal.scrollTop = terminal.scrollHeight;
                                 }
                             }

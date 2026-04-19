@@ -4,6 +4,8 @@ import threading
 import datetime
 import json
 import pymysql
+import sys
+from sshtunnel import SSHTunnelForwarder
 from dotenv import load_dotenv
 import shutil
 from pathlib import Path
@@ -111,14 +113,14 @@ class HistoryWindow(ctk.CTkToplevel):
         self._load_history(service_name)
 
     def _load_history(self, service_name):
+        conn = None
         try:
-            conn = pymysql.connect(
-                host=os.getenv("MYSQL_HOST", "localhost"),
-                user=os.getenv("MYSQL_USER", "root"),
-                password=os.getenv("MYSQL_PASSWORD", ""),
-                database=os.getenv("MYSQL_DB", "deploy_logs"),
-                cursorclass=pymysql.cursors.DictCursor
-            )
+            conn = self.master.master.master._get_db_conn() # Access parent's helper if possible, but cleaner to just reimplement or pass it
+            # Actually, HistoryWindow is a child of the app.
+            # Let's just use a simple connection here for now or fix the access
+            parent_app = self.master
+            conn = parent_app._get_db_conn()
+            
             with conn.cursor() as cur:
                 cur.execute("""
                     SELECT user_name, environment, branch, created_at, message 
@@ -128,7 +130,6 @@ class HistoryWindow(ctk.CTkToplevel):
                     LIMIT 50
                 """, (service_name,))
                 rows = cur.fetchall()
-            conn.close()
 
             if not rows:
                 ctk.CTkLabel(self.table_frame, text="No history found.").pack(pady=20)
@@ -146,6 +147,11 @@ class HistoryWindow(ctk.CTkToplevel):
 
         except Exception as e:
             ctk.CTkLabel(self.table_frame, text=f"Error loading history: {e}", text_color="red").pack(pady=20)
+        finally:
+            if conn:
+                conn.close()
+                if hasattr(conn, 'ssh_tunnel'):
+                    conn.ssh_tunnel.stop()
 
 
 # ─────────────────────────────────────────────
@@ -160,12 +166,19 @@ class DeployApp(ctk.CTk):
 
         self.services = []
         self.current_branch = ""
-        self.settings_file = Path(__file__).resolve().parent / "settings.json"
+        if getattr(sys, 'frozen', False):
+            # Running as bundled exe
+            self.base_path = Path(sys.executable).parent
+        else:
+            # Running as script
+            self.base_path = Path(__file__).resolve().parent
+
+        self.settings_file = self.base_path / "settings.json"
 
         self.settings = {
             "user_name": "",
             "git_bash_path": r"C:\Program Files\Git\bin\bash.exe",
-            "workspace_url": str(Path(__file__).resolve().parent.parent),
+            "workspace_url": str(self.base_path.parent),
             "pre_deploy_cmd": "",
         }
 
@@ -473,6 +486,57 @@ class DeployApp(ctk.CTk):
         self.validate_form()
         self._refresh_last_deploy_info()
 
+    def _get_db_conn(self):
+        """Helper to get MySQL connection, optionally via SSH tunnel using ENV vars."""
+        db_host = os.getenv("MYSQL_HOST", "localhost")
+        db_user = os.getenv("MYSQL_USER", "root")
+        db_pwd  = os.getenv("MYSQL_PASSWORD", "")
+        db_name = os.getenv("MYSQL_DB", "deploy_logs")
+        db_port = int(os.getenv("MYSQL_PORT", "3306"))
+
+        app_env = os.getenv("APP_ENV", "local").lower()
+        use_ssh = os.getenv("USE_SSH", "false").lower() == "true" or app_env == "local"
+
+        if use_ssh and app_env == "local":
+            ssh_host = os.getenv("SSH_HOST")
+            ssh_port = int(os.getenv("SSH_PORT", "22"))
+            ssh_user = os.getenv("SSH_USER")
+            ssh_key  = os.getenv("SSH_KEY_PATH")
+            ssh_pwd  = os.getenv("SSH_PASSWORD")
+            
+            if not ssh_host or not ssh_user:
+                # If SSH is missing in ENV while in local, try direct connect as fallback or log error
+                pass 
+            else:
+                tunnel = SSHTunnelForwarder(
+                    (ssh_host, ssh_port),
+                    ssh_username=ssh_user,
+                    ssh_password=ssh_pwd if not ssh_key else None,
+                    ssh_pkey=ssh_key if ssh_key else None,
+                    remote_bind_address=(db_host, db_port)
+                )
+                tunnel.start()
+                
+                conn = pymysql.connect(
+                    host='127.0.0.1',
+                    port=tunnel.local_bind_port,
+                    user=db_user,
+                    password=db_pwd,
+                    database=db_name,
+                    cursorclass=pymysql.cursors.DictCursor
+                )
+                conn.ssh_tunnel = tunnel
+                return conn
+
+        return pymysql.connect(
+            host=db_host,
+            port=db_port,
+            user=db_user,
+            password=db_pwd,
+            database=db_name,
+            cursorclass=pymysql.cursors.DictCursor
+        )
+
     def _refresh_last_deploy_info(self):
         svc = self._get_selected_service()
         if not svc:
@@ -481,14 +545,9 @@ class DeployApp(ctk.CTk):
             return
 
         def task():
+            conn = None
             try:
-                conn = pymysql.connect(
-                    host=os.getenv("MYSQL_HOST", "localhost"),
-                    user=os.getenv("MYSQL_USER", "root"),
-                    password=os.getenv("MYSQL_PASSWORD", ""),
-                    database=os.getenv("MYSQL_DB", "deploy_logs"),
-                    cursorclass=pymysql.cursors.DictCursor
-                )
+                conn = self._get_db_conn()
                 with conn.cursor() as cur:
                     cur.execute("""
                         SELECT user_name, created_at, environment, branch, message 
@@ -497,7 +556,6 @@ class DeployApp(ctk.CTk):
                         ORDER BY created_at DESC LIMIT 1
                     """, (svc["name"],))
                     row = cur.fetchone()
-                conn.close()
 
                 if row:
                     time_str = row['created_at'].strftime("%H:%M %d/%m")
@@ -509,8 +567,14 @@ class DeployApp(ctk.CTk):
                 else:
                     self.after(0, lambda: self.lbl_last_deploy.configure(text="Last deploy: Never"))
                     self.after(0, lambda: self.btn_view_more.configure(state="disabled"))
-            except Exception:
+            except Exception as e:
+                print(f"DB Error: {e}")
                 self.after(0, lambda: self.lbl_last_deploy.configure(text="Last deploy: (db error)"))
+            finally:
+                if conn:
+                    conn.close()
+                    if hasattr(conn, 'ssh_tunnel'):
+                        conn.ssh_tunnel.stop()
 
         threading.Thread(target=task, daemon=True).start()
 
@@ -605,14 +669,9 @@ class DeployApp(ctk.CTk):
         self.terminal.delete("1.0", "end")
 
         def save_to_mysql():
+            conn = None
             try:
-                conn = pymysql.connect(
-                    host=os.getenv("MYSQL_HOST", "localhost"),
-                    user=os.getenv("MYSQL_USER", "root"),
-                    password=os.getenv("MYSQL_PASSWORD", ""),
-                    database=os.getenv("MYSQL_DB", "deploy_logs"),
-                    cursorclass=pymysql.cursors.DictCursor,
-                )
+                conn = self._get_db_conn()
                 with conn.cursor() as cur:
                     cur.execute('''
                         CREATE TABLE IF NOT EXISTS deployments (
@@ -630,10 +689,17 @@ class DeployApp(ctk.CTk):
                     ''', (user_name, svc["name"], env,
                           self.current_branch, user_msg, datetime.datetime.now()))
                 conn.commit()
-                conn.close()
                 self.after(0, self.append_terminal, "\n[MySQL] Saved deployment log ✓\n")
             except Exception as e:
-                self.after(0, self.append_terminal, f"\n[MySQL] Failed: {e}\n")
+                err_msg = str(e)
+                if ".pub" in self.settings.get("ssh_key_path", "").lower():
+                    err_msg += " (Note: Do not use .pub file, use the Private Key file)"
+                self.after(0, self.append_terminal, f"\n[MySQL] Error: {err_msg}\n")
+            finally:
+                if conn:
+                    conn.close()
+                    if hasattr(conn, 'ssh_tunnel'):
+                        conn.ssh_tunnel.stop()
 
         def task():
             try:

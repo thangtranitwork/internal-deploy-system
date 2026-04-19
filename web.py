@@ -6,8 +6,10 @@ import json
 import pymysql
 import shutil
 from pathlib import Path
+import sys
 from flask import Flask, render_template, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
+from sshtunnel import SSHTunnelForwarder
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -16,15 +18,18 @@ app = Flask(__name__)
 CORS(app)
 
 # ─────────────────────────────────────────────
-#  Settings Management
-# ─────────────────────────────────────────────
-SETTINGS_FILE = Path(__file__).resolve().parent / "settings.json"
+if getattr(sys, 'frozen', False):
+    BASE_PATH = Path(sys.executable).parent
+else:
+    BASE_PATH = Path(__file__).resolve().parent
+
+SETTINGS_FILE = BASE_PATH / "settings.json"
 
 def get_settings():
     default_settings = {
         "user_name": "",
         "git_bash_path": r"C:\Program Files\Git\bin\bash.exe",
-        "workspace_url": str(Path(__file__).resolve().parent.parent),
+        "workspace_url": str(BASE_PATH.parent),
         "pre_deploy_cmd": "",
     }
     if SETTINGS_FILE.exists():
@@ -104,15 +109,58 @@ def scan_services(workspace_url):
             })
     return services
 
+def get_db_conn():
+    """Helper for MySQL connection with optional SSH tunnel using ENV vars."""
+    db_host = os.getenv("MYSQL_HOST", "localhost")
+    db_user = os.getenv("MYSQL_USER", "root")
+    db_pwd  = os.getenv("MYSQL_PASSWORD", "")
+    db_name = os.getenv("MYSQL_DB", "deploy_logs")
+    db_port = int(os.getenv("MYSQL_PORT", "3306"))
+
+    app_env = os.getenv("APP_ENV", "local").lower()
+    use_ssh = os.getenv("USE_SSH", "false").lower() == "true" or app_env == "local"
+
+    if use_ssh and app_env == "local":
+        ssh_host = os.getenv("SSH_HOST")
+        ssh_port = int(os.getenv("SSH_PORT", "22"))
+        ssh_user = os.getenv("SSH_USER")
+        ssh_key  = os.getenv("SSH_KEY_PATH")
+        ssh_pwd  = os.getenv("SSH_PASSWORD")
+        
+        if ssh_host and ssh_user:
+            tunnel = SSHTunnelForwarder(
+                (ssh_host, ssh_port),
+                ssh_username=ssh_user,
+                ssh_password=ssh_pwd if not ssh_key else None,
+                ssh_pkey=ssh_key if ssh_key else None,
+                remote_bind_address=(db_host, db_port)
+            )
+            tunnel.start()
+            
+            conn = pymysql.connect(
+                host='127.0.0.1',
+                port=tunnel.local_bind_port,
+                user=db_user,
+                password=db_pwd,
+                database=db_name,
+                cursorclass=pymysql.cursors.DictCursor
+            )
+            conn.ssh_tunnel = tunnel
+            return conn
+
+    return pymysql.connect(
+        host=db_host,
+        port=db_port,
+        user=db_user,
+        password=db_pwd,
+        database=db_name,
+        cursorclass=pymysql.cursors.DictCursor
+    )
+
 def log_to_mysql(user_name, service_name, env, branch, message):
+    conn = None
     try:
-        conn = pymysql.connect(
-            host=os.getenv("MYSQL_HOST", "localhost"),
-            user=os.getenv("MYSQL_USER", "root"),
-            password=os.getenv("MYSQL_PASSWORD", ""),
-            database=os.getenv("MYSQL_DB", "deploy_logs"),
-            cursorclass=pymysql.cursors.DictCursor,
-        )
+        conn = get_db_conn()
         with conn.cursor() as cur:
             cur.execute('''
                 CREATE TABLE IF NOT EXISTS deployments (
@@ -129,11 +177,19 @@ def log_to_mysql(user_name, service_name, env, branch, message):
                 VALUES (%s, %s, %s, %s, %s, %s)
             ''', (user_name, service_name, env, branch, message, datetime.datetime.now()))
         conn.commit()
-        conn.close()
-        return True
+        return True, "Saved deployment log \u2713"
     except Exception as e:
-        print(f"MySQL Error: {e}")
-        return False
+        err_msg = str(e)
+        ssh_key_path = os.getenv("SSH_KEY_PATH", "")
+        if ".pub" in ssh_key_path.lower():
+            err_msg += " (Note: Do not use .pub file, use the Private Key file)"
+        print(f"MySQL Error: {err_msg}")
+        return False, err_msg
+    finally:
+        if conn:
+            conn.close()
+            if hasattr(conn, 'ssh_tunnel'):
+                conn.ssh_tunnel.stop()
 
 # ─────────────────────────────────────────────
 #  API Endpoints
@@ -153,7 +209,13 @@ def settings_api():
         if save_settings(data):
             return jsonify({"status": "ok"})
         return jsonify({"status": "error"}), 500
-    return jsonify(get_settings())
+    
+    try:
+        settings = get_settings()
+        return jsonify(settings)
+    except Exception as e:
+        print(f"Settings API Error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/api/services")
 def services_api():
@@ -162,14 +224,9 @@ def services_api():
 
 @app.route("/api/history/<service_name>")
 def history_api(service_name):
+    conn = None
     try:
-        conn = pymysql.connect(
-            host=os.getenv("MYSQL_HOST", "localhost"),
-            user=os.getenv("MYSQL_USER", "root"),
-            password=os.getenv("MYSQL_PASSWORD", ""),
-            database=os.getenv("MYSQL_DB", "deploy_logs"),
-            cursorclass=pymysql.cursors.DictCursor
-        )
+        conn = get_db_conn()
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT user_name, environment, branch, created_at, message 
@@ -179,13 +236,17 @@ def history_api(service_name):
                 LIMIT 30
             """, (service_name,))
             rows = cur.fetchall()
-            # Convert datetime to string for JSON
             for r in rows:
                 r['created_at'] = r['created_at'].strftime("%Y-%m-%d %H:%M:%S")
-        conn.close()
         return jsonify(rows)
     except Exception as e:
+        print(f"History API Error: {e}")
         return jsonify({"error": str(e)}), 500
+    finally:
+        if conn:
+            conn.close()
+            if hasattr(conn, 'ssh_tunnel'):
+                conn.ssh_tunnel.stop()
 
 @app.route("/api/deploy", methods=["POST"])
 def deploy_api():
@@ -242,10 +303,8 @@ def deploy_api():
         
         if proc.returncode == 0:
             yield f"data: \n[Deploy finished successfully \u2713]\n\n"
-            if log_to_mysql(user_name, service_name, env, branch, user_msg):
-                yield "data: [MySQL] Saved deployment log \u2713\n\n"
-            else:
-                yield "data: [MySQL] Failed to save log\n\n"
+            success, msg = log_to_mysql(user_name, service_name, env, branch, user_msg)
+            yield f"data: [MySQL] {msg}\n\n"
         else:
             yield f"data: \n[Deploy error \u2014 exit {proc.returncode}]\n\n"
         

@@ -1,4 +1,7 @@
 @echo off
+set "SCRIPT_DIR=%~dp0"
+cd /d "%SCRIPT_DIR%.."
+
 echo ========================================
 echo  Building Service Deploy Commander
 echo ========================================
@@ -14,10 +17,10 @@ pip install pyinstaller customtkinter pymysql python-dotenv Pillow --quiet --upg
 
 :: Build using the spec file
 echo [3/3] Building executable...
-pyinstaller --clean deploy.spec
+pyinstaller --clean --distpath . deploy.spec
 
 echo.
 echo ========================================
-echo  SUCCESS: dist\DeployCommander.exe
+echo  SUCCESS: IDS.exe (Located in root)
 echo ========================================
 pause

@@ -1,6 +1,7 @@
+flask
+flask-cors
 pymysql
 python-dotenv
-customtkinter
-Flask
-flask-cors
-Pillow
+sshtunnel
+paramiko==2.12.0
+cryptography
