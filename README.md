@@ -39,8 +39,8 @@ deploy-tool/
 
 1. **Clone the repository**:
    ```bash
-   git clone <repository-url>
-   cd deploy-tool
+   git clone https://github.com/thangtranitwork/internal-deploy-system
+   cd internal-deploy-system
    ```
 
 2. **Install dependencies**:
