@@ -93,6 +93,62 @@ class SettingsWindow(ctk.CTkToplevel):
 
 
 # ─────────────────────────────────────────────
+#  History Window
+# ─────────────────────────────────────────────
+class HistoryWindow(ctk.CTkToplevel):
+    def __init__(self, parent, service_name):
+        super().__init__(parent)
+        self.title(f"📜 Deployment History - {service_name}")
+        self.geometry("800x500")
+        self.grab_set()
+
+        ctk.CTkLabel(self, text=f"Deployment history for {service_name}",
+                     font=ctk.CTkFont(size=14, weight="bold")).pack(pady=12)
+
+        self.table_frame = ctk.CTkScrollableFrame(self)
+        self.table_frame.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+
+        self._load_history(service_name)
+
+    def _load_history(self, service_name):
+        try:
+            conn = pymysql.connect(
+                host=os.getenv("MYSQL_HOST", "localhost"),
+                user=os.getenv("MYSQL_USER", "root"),
+                password=os.getenv("MYSQL_PASSWORD", ""),
+                database=os.getenv("MYSQL_DB", "deploy_logs"),
+                cursorclass=pymysql.cursors.DictCursor
+            )
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT user_name, environment, branch, created_at, message 
+                    FROM deployments 
+                    WHERE service = %s 
+                    ORDER BY created_at DESC 
+                    LIMIT 50
+                """, (service_name,))
+                rows = cur.fetchall()
+            conn.close()
+
+            if not rows:
+                ctk.CTkLabel(self.table_frame, text="No history found.").pack(pady=20)
+                return
+
+            for r in rows:
+                f = ctk.CTkFrame(self.table_frame, fg_color="#161b22")
+                f.pack(fill="x", pady=4, padx=5)
+                
+                time_str = r['created_at'].strftime("%H:%M %d/%m/%Y")
+                title = f"{time_str} | User: {r['user_name']} | Env: {r['environment']} | Branch: {r['branch']}"
+                
+                ctk.CTkLabel(f, text=title, font=ctk.CTkFont(weight="bold", size=12), text_color="#58a6ff").pack(anchor="w", padx=12, pady=(8, 2))
+                ctk.CTkLabel(f, text=f"💬 {r['message']}", text_color="#e6edf3", font=ctk.CTkFont(size=12), wraplength=740).pack(anchor="w", padx=12, pady=(0, 8))
+
+        except Exception as e:
+            ctk.CTkLabel(self.table_frame, text=f"Error loading history: {e}", text_color="red").pack(pady=20)
+
+
+# ─────────────────────────────────────────────
 #  Main App
 # ─────────────────────────────────────────────
 class DeployApp(ctk.CTk):
@@ -157,7 +213,7 @@ class DeployApp(ctk.CTk):
         ctk.CTkLabel(top, text="🚀 Service Deploy Commander",
                      font=ctk.CTkFont(size=22, weight="bold")).pack(side="left")
         ctk.CTkButton(top, text="⚙️ Settings  (Ctrl+K O)",
-                      width=170, command=self._open_settings).pack(side="right")
+                       width=170, command=self._open_settings).pack(side="right")
 
         # Info bar
         self.lbl_info = ctk.CTkLabel(self, text="", text_color="gray",
@@ -182,7 +238,7 @@ class DeployApp(ctk.CTk):
 
         ctk.CTkLabel(left, text="SERVICES", text_color="gray",
                      font=ctk.CTkFont(size=11)).grid(row=0, column=0, sticky="w",
-                                                     padx=14, pady=(14, 4))
+                                                      padx=14, pady=(14, 4))
 
         list_frame = ctk.CTkFrame(left, fg_color="#010409")
         list_frame.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 8))
@@ -257,15 +313,30 @@ class DeployApp(ctk.CTk):
         )
         self.btn_terminal.grid(row=0, column=1)
 
+        # --- history bar (new)
+        self.hist_frame = ctk.CTkFrame(right, fg_color="#161b22", corner_radius=6)
+        self.hist_frame.grid(row=6, column=0, sticky="ew", padx=16, pady=(0, 10))
+        
+        self.lbl_last_deploy = ctk.CTkLabel(self.hist_frame, text="Last deploy: —", 
+                                            font=ctk.CTkFont(size=11), text_color="#8b949e")
+        self.lbl_last_deploy.pack(side="left", padx=12, pady=8)
+        
+        self.btn_view_more = ctk.CTkButton(self.hist_frame, text="View More", width=80, 
+                                           height=24, font=ctk.CTkFont(size=10),
+                                           fg_color="transparent", border_width=1,
+                                           command=self._view_full_history)
+        self.btn_view_more.pack(side="right", padx=12)
+        self.btn_view_more.configure(state="disabled")
+
         # --- logs
         ctk.CTkLabel(right, text="LOGS", text_color="gray",
-                     font=ctk.CTkFont(size=11)).grid(row=6, column=0, sticky="w",
-                                                     padx=16, pady=(4, 2))
-        right.rowconfigure(7, weight=1)
+                     font=ctk.CTkFont(size=11)).grid(row=7, column=0, sticky="w",
+                                                      padx=16, pady=(4, 2))
+        right.rowconfigure(8, weight=1)
         self.terminal = ctk.CTkTextbox(right,
                                        font=ctk.CTkFont(family="Consolas", size=12),
                                        fg_color="#010409", text_color="#e6edf3")
-        self.terminal.grid(row=7, column=0, sticky="nsew", padx=16, pady=(0, 16))
+        self.terminal.grid(row=8, column=0, sticky="nsew", padx=16, pady=(0, 16))
 
     # ── Open real terminal ──────────────────────────────────────────────────
     def _open_terminal_here(self):
@@ -400,6 +471,53 @@ class DeployApp(ctk.CTk):
             pass
 
         self.validate_form()
+        self._refresh_last_deploy_info()
+
+    def _refresh_last_deploy_info(self):
+        svc = self._get_selected_service()
+        if not svc:
+            self.lbl_last_deploy.configure(text="Last deploy: —")
+            self.btn_view_more.configure(state="disabled")
+            return
+
+        def task():
+            try:
+                conn = pymysql.connect(
+                    host=os.getenv("MYSQL_HOST", "localhost"),
+                    user=os.getenv("MYSQL_USER", "root"),
+                    password=os.getenv("MYSQL_PASSWORD", ""),
+                    database=os.getenv("MYSQL_DB", "deploy_logs"),
+                    cursorclass=pymysql.cursors.DictCursor
+                )
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT user_name, created_at, environment, branch, message 
+                        FROM deployments 
+                        WHERE service = %s 
+                        ORDER BY created_at DESC LIMIT 1
+                    """, (svc["name"],))
+                    row = cur.fetchone()
+                conn.close()
+
+                if row:
+                    time_str = row['created_at'].strftime("%H:%M %d/%m")
+                    msg = row['message']
+                    if len(msg) > 40: msg = msg[:37] + "..."
+                    info = f"Last: {time_str} by {row['user_name']} | {row['environment']} | {row['branch']} | {msg}"
+                    self.after(0, lambda: self.lbl_last_deploy.configure(text=info))
+                    self.after(0, lambda: self.btn_view_more.configure(state="normal"))
+                else:
+                    self.after(0, lambda: self.lbl_last_deploy.configure(text="Last deploy: Never"))
+                    self.after(0, lambda: self.btn_view_more.configure(state="disabled"))
+            except Exception:
+                self.after(0, lambda: self.lbl_last_deploy.configure(text="Last deploy: (db error)"))
+
+        threading.Thread(target=task, daemon=True).start()
+
+    def _view_full_history(self):
+        svc = self._get_selected_service()
+        if svc:
+            HistoryWindow(self, svc["name"])
 
     def _get_selected_service(self):
         sel = self.svc_listbox.curselection()
@@ -539,6 +657,7 @@ class DeployApp(ctk.CTk):
                           else f"\n[Deploy error — exit {rc}]\n")
                 self.after(0, self.append_terminal, result)
                 save_to_mysql()
+                self._refresh_last_deploy_info()
 
             except Exception as e:
                 self.after(0, self.append_terminal, f"\nFailed: {e}\n")

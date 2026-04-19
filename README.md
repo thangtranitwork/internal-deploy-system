@@ -6,10 +6,14 @@ A desktop tool built with Python and CustomTkinter to automate service deploymen
 
 ```text
 deploy-tool/
-├── app.py              # Main application logic
+├── app.py              # Desktop application (CustomTkinter)
+├── web.py              # Web application backend (Flask)
+├── run_web.bat         # Launch script for the web version
+├── templates/
+│   └── index.html      # Web frontend
 ├── app.ico             # Application icon
 ├── deploy.spec         # PyInstaller configuration
-├── build.bat           # Build script for Windows
+├── build.bat           # Build script for Windows EXE
 ├── .env.example        # Environment variables template
 ├── requirements.txt    # Python dependencies
 └── README.md           # Documentation
@@ -17,6 +21,7 @@ deploy-tool/
 
 ## 🛠 Features
 
+- **Dual UI**: Use the **Desktop App** (`app.py`) for a native experience or the **Web Dashboard** (`web.py`) for a modern browser interface.
 - **Service Scanning**: Automatically detects services in a specified workspace directory.
 - **Git Integration**: Detects the current branch of the selected service.
 - **Environment Support**: Supports "Development" and "Staging" deployment environments.
@@ -53,9 +58,8 @@ deploy-tool/
    ```
 
 4. **Run the Application**:
-   ```bash
-   python app.py
-   ```
+   - **📱 Desktop Interface**: Run `python app.py` for a native Windows experience.
+   - **🌐 Web Dashboard**: Run `python web.py` (hoặc chạy `run_web.bat`) sau đó truy cập `http://localhost:5000` trên trình duyệt.
 
 ## 🏗 Building Executable
 
