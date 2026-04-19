@@ -1,0 +1,6 @@
+{
+    "user_name": "K\u1ebb h\u1ee7y di\u1ec7t v\u0169 tr\u1ee5",
+    "git_bash_path": "D:/Apps/Git/bin/bash.exe",
+    "workspace_url": "D:\\Working\\Go",
+    "pre_deploy_cmd": "go mod tidy"
+}
