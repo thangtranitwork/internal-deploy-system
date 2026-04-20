@@ -88,6 +88,29 @@ python app.py
 - **Pre-deploy Command**: Configure a command (like `go mod tidy` or `npm install`) to run before the main deployment script.
 - **SSH Protocol**: Built-in support for both SSH Password and Private Key authentication.
 
+## 🖥️ Running as a Windows Service (NSSM)
+
+To ensure the Deployment Tool runs in the background and starts automatically with Windows, you can use **NSSM**:
+
+1. **Build the executable**:
+   ```powershell
+   go build -o app.exe main.go
+   ```
+2. **Download NSSM**: Get it from [nssm.cc](https://nssm.cc/download).
+3. **Install the Service**:
+   Open PowerShell/CMD as **Administrator** and run:
+   ```powershell
+   path\to\nssm.exe install IDS-Commander
+   ```
+4. **Configure in GUI**:
+   - **Path**: Select your built `app.exe`.
+   - **Startup directory**: Your project root folder.
+   - **Details Tab**: Set the Display Name (e.g., `IDS Deploy Tool`).
+5. **Manage Service**:
+   - **Start**: `nssm start IDS-Commander`
+   - **Edit**: `nssm edit IDS-Commander`
+   - **Remove**: `nssm remove IDS-Commander`
+
 ## 📄 License
 
 This project is licensed under the MIT License.
