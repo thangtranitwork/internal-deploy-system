@@ -220,6 +220,7 @@
             background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px;
             width: 500px; padding: 24px; display: flex; flex-direction: column; gap: 16px;
             box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+            max-height: 90vh; overflow-y: auto;
         }
         .modal-header { font-size: 18px; font-weight: 700; border-bottom: 1px solid var(--border); padding-bottom: 12px; color: var(--accent); }
         .modal-footer { display: flex; justify-content: flex-end; gap: 12px; margin-top: 10px; }
@@ -359,14 +360,53 @@
                 <div class="label">Pre-deploy Command</div>
                 <input type="text" id="set-pre" placeholder="e.g. go mod tidy">
             </div>
-            <div>
-                <div class="label">Accent Color (Main Theme)</div>
-                <div style="display: flex; align-items: center; gap: 12px;">
-                    <input type="color" id="set-accent" style="width: 50px; height: 36px; padding: 2px; cursor: pointer;">
-                    <span id="accent-hex" style="font-family: var(--font-mono); font-size: 13px; color: var(--text-dim);">#000000</span>
+            
+            <div style="border-top: 1px solid var(--border); padding-top: 16px;">
+                <div class="label">Theme Customization</div>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                    <div class="env-selector">
+                        <button id="config-dark-btn" class="env-btn active" onclick="switchConfigTheme('dark')">Dark Mode</button>
+                        <button id="config-light-btn" class="env-btn" onclick="switchConfigTheme('light')">Light Mode</button>
+                    </div>
+                    <button id="copy-theme-btn" onclick="copyOtherThemeColors()" style="font-size: 11px; padding: 4px 10px;">📋 Copy from Light</button>
+                </div>
+
+                <div style="display: flex; flex-direction: column; gap: 12px;">
+                    <div>
+                        <div class="label">Accent Color</div>
+                        <div style="display: flex; align-items: center; gap: 12px;">
+                            <input type="color" id="set-accent" oninput="updateColorHex('accent')">
+                            <span id="accent-hex" style="font-family: var(--font-mono); font-size: 13px; color: var(--text-dim);">#000000</span>
+                        </div>
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                        <div>
+                            <div class="label">Main Text</div>
+                            <div style="display: flex; align-items: center; gap: 12px;">
+                                <input type="color" id="set-text-color" oninput="updateColorHex('text')">
+                                <span id="text-hex" style="font-family: var(--font-mono); font-size: 11px; color: var(--text-dim);">#000000</span>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="label">Dim Text</div>
+                            <div style="display: flex; align-items: center; gap: 12px;">
+                                <input type="color" id="set-text-dim" oninput="updateColorHex('dim')">
+                                <span id="text-dim-hex" style="font-family: var(--font-mono); font-size: 11px; color: var(--text-dim);">#000000</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="label">Terminal Text</div>
+                        <div style="display: flex; align-items: center; gap: 12px;">
+                            <input type="color" id="set-terminal-color" oninput="updateColorHex('terminal')">
+                            <span id="terminal-hex" style="font-family: var(--font-mono); font-size: 13px; color: var(--text-dim);">#000000</span>
+                        </div>
+                    </div>
                 </div>
             </div>
+
             <div class="modal-footer">
+                <button onclick="resetColorsToDefault()" style="margin-right: auto; color: var(--error); border-color: var(--error); font-size: 12px; padding: 4px 10px;">↺ Reset to Default</button>
                 <button onclick="closeSettings()">Cancel</button>
                 <button class="primary" onclick="saveSettings()">Save Changes</button>
             </div>
@@ -378,6 +418,13 @@
         let selectedService = null;
         let currentEnv = 'Development';
         let settings = {};
+        
+        // Color customization state
+        let configTheme = 'dark'; // 'dark' or 'light'
+        let colorState = {
+            dark: { accent: '', text: '', dim: '', terminal: '' },
+            light: { accent: '', text: '', dim: '', terminal: '' }
+        };
 
         async function init() {
             initTheme();
@@ -387,9 +434,11 @@
         }
 
         function initTheme() {
-            const savedTheme = localStorage.getItem('theme');
+            const savedTheme = localStorage.getItem('theme') || 'dark';
             if (savedTheme === 'light') {
                 document.body.classList.add('light-theme');
+            } else {
+                document.body.classList.remove('light-theme');
             }
         }
 
@@ -397,6 +446,103 @@
             document.body.classList.toggle('light-theme');
             const isLight = document.body.classList.contains('light-theme');
             localStorage.setItem('theme', isLight ? 'light' : 'dark');
+            // Re-apply colors for the new theme
+            applyThemeSettings(settings);
+        }
+
+        function switchConfigTheme(theme) {
+            // Save current UI state to state object before switching
+            saveUIColorsToState();
+
+            configTheme = theme;
+            document.getElementById('config-dark-btn').classList.toggle('active', theme === 'dark');
+            document.getElementById('config-light-btn').classList.toggle('active', theme === 'light');
+            document.getElementById('copy-theme-btn').innerText = theme === 'dark' ? '📋 Copy from Light' : '📋 Copy from Dark';
+            
+            // Load state to UI
+            loadStateToUI(theme);
+        }
+
+        function saveUIColorsToState() {
+            colorState[configTheme] = {
+                accent: document.getElementById('set-accent').value,
+                text: document.getElementById('set-text-color').value,
+                dim: document.getElementById('set-text-dim').value,
+                terminal: document.getElementById('set-terminal-color').value
+            };
+        }
+
+        function loadStateToUI(theme) {
+            const colors = colorState[theme];
+            document.getElementById('set-accent').value = colors.accent;
+            document.getElementById('accent-hex').innerText = colors.accent.toUpperCase();
+            document.getElementById('set-text-color').value = colors.text;
+            document.getElementById('text-hex').innerText = colors.text.toUpperCase();
+            document.getElementById('set-text-dim').value = colors.dim;
+            document.getElementById('text-dim-hex').innerText = colors.dim.toUpperCase();
+            document.getElementById('set-terminal-color').value = colors.terminal;
+            document.getElementById('terminal-hex').innerText = colors.terminal.toUpperCase();
+        }
+
+        function copyOtherThemeColors() {
+            const other = configTheme === 'dark' ? 'light' : 'dark';
+            colorState[configTheme] = JSON.parse(JSON.stringify(colorState[other]));
+            loadStateToUI(configTheme);
+        }
+
+        function updateColorHex(type) {
+            const inputMap = {
+                'accent': 'accent-hex',
+                'text': 'text-hex',
+                'dim': 'text-dim-hex',
+                'terminal': 'terminal-hex'
+            };
+            const val = document.getElementById(`set-${type === 'accent' ? 'accent' : type === 'text' ? 'text-color' : type === 'dim' ? 'text-dim' : 'terminal-color'}`).value;
+            document.getElementById(inputMap[type]).innerText = val.toUpperCase();
+            
+            // Preview immediately if this matches current site theme
+            const isSiteLight = document.body.classList.contains('light-theme');
+            if ((isSiteLight && configTheme === 'light') || (!isSiteLight && configTheme === 'dark')) {
+                saveUIColorsToState();
+                applyThemeSettings({
+                    dark_theme: { 
+                        accent: colorState.dark.accent, 
+                        text_main: colorState.dark.text, 
+                        text_dim: colorState.dark.dim, 
+                        terminal_text: colorState.dark.terminal 
+                    },
+                    light_theme: { 
+                        accent: colorState.light.accent, 
+                        text_main: colorState.light.text, 
+                        text_dim: colorState.light.dim, 
+                        terminal_text: colorState.light.terminal 
+                    }
+                });
+            }
+        }
+
+        function resetColorsToDefault() {
+            const isLight = configTheme === 'light';
+            const defaults = isLight ? {
+                accent: '#10b981',
+                text: '#1a1c1e',
+                dim: '#64748b',
+                terminal: '#f8fafc'
+            } : {
+                accent: '#f85149',
+                text: '#e6edf3',
+                dim: '#8b949e',
+                terminal: '#f8fafc'
+            };
+            
+            colorState[configTheme] = {
+                accent: defaults.accent,
+                text: defaults.text,
+                dim: defaults.dim,
+                terminal: defaults.terminal
+            };
+            loadStateToUI(configTheme);
+            updateColorHex('accent'); updateColorHex('text'); updateColorHex('dim'); updateColorHex('terminal');
         }
 
         async function loadSettings() {
@@ -410,29 +556,61 @@
             document.getElementById('set-name').value = settings.user_name || '';
             document.getElementById('set-pre').value = settings.pre_deploy_cmd || '';
             
-            const accent = settings.accent_color || '#f85149';
-            document.getElementById('set-accent').value = accent;
-            document.getElementById('accent-hex').innerText = accent.toUpperCase();
-            applyAccentColor(accent);
+            // Map settings to state
+            colorState.dark = {
+                accent: settings.dark_theme.accent,
+                text: settings.dark_theme.text_main,
+                dim: settings.dark_theme.text_dim,
+                terminal: settings.dark_theme.terminal_text
+            };
+            colorState.light = {
+                accent: settings.light_theme.accent,
+                text: settings.light_theme.text_main,
+                dim: settings.light_theme.text_dim,
+                terminal: settings.light_theme.terminal_text
+            };
+
+            // Set UI to match current editing theme (default to dark in modal)
+            loadStateToUI(configTheme);
+            applyThemeSettings(settings);
         }
 
-        function applyAccentColor(color) {
-            if (!color) return;
-            document.documentElement.style.setProperty('--accent', color);
-            // Create glow color with alpha
-            const r = parseInt(color.slice(1, 3), 16);
-            const g = parseInt(color.slice(3, 5), 16);
-            const b = parseInt(color.slice(5, 7), 16);
-            document.documentElement.style.setProperty('--accent-glow', `rgba(${r}, ${g}, ${b}, 0.3)`);
+        function applyThemeSettings(s) {
+            const isLight = document.body.classList.contains('light-theme');
+            const themeData = isLight ? s.light_theme : s.dark_theme;
+            const target = document.body;
+
+            if (themeData.accent) {
+                target.style.setProperty('--accent', themeData.accent);
+                const r = parseInt(themeData.accent.slice(1, 3), 16);
+                const g = parseInt(themeData.accent.slice(3, 5), 16);
+                const b = parseInt(themeData.accent.slice(5, 7), 16);
+                target.style.setProperty('--accent-glow', `rgba(${r}, ${g}, ${b}, 0.3)`);
+            }
+            if (themeData.text_main) target.style.setProperty('--text-main', themeData.text_main);
+            if (themeData.text_dim) target.style.setProperty('--text-dim', themeData.text_dim);
+            if (themeData.terminal_text) target.style.setProperty('--terminal-text', themeData.terminal_text);
         }
 
         async function saveSettings() {
+            saveUIColorsToState(); // Ensure last edits are captured
             const newSettings = {
                 workspace_url: document.getElementById('set-ws').value,
                 git_bash_path: document.getElementById('set-git').value,
                 user_name: document.getElementById('set-name').value,
                 pre_deploy_cmd: document.getElementById('set-pre').value,
-                accent_color: document.getElementById('set-accent').value
+                dark_theme: {
+                    accent: colorState.dark.accent,
+                    text_main: colorState.dark.text,
+                    text_dim: colorState.dark.dim,
+                    terminal_text: colorState.dark.terminal
+                },
+                light_theme: {
+                    accent: colorState.light.accent,
+                    text_main: colorState.light.text,
+                    text_dim: colorState.light.dim,
+                    terminal_text: colorState.light.terminal
+                }
             };
             await fetch('/api/settings', {
                 method: 'POST',
@@ -445,24 +623,20 @@
 
         async function refreshServices() {
             const list = document.getElementById('service-list');
-            // Only show shimmer on first load
             if (list.innerHTML === '') {
                 list.innerHTML = '<div class="service-item shimmer" style="height: 60px"></div>'.repeat(3);
             }
-            
             const res = await fetch('/api/services');
             const newServices = await res.json();
             services = newServices;
-            
             const currentSelectedName = selectedService ? selectedService.name : null;
             list.innerHTML = '';
-            
             services.forEach(svc => {
                 const item = document.createElement('div');
                 item.className = 'service-item';
                 if (currentSelectedName === svc.name) {
                     item.classList.add('active');
-                    selectedService = svc; // Update reference with new data
+                    selectedService = svc;
                 }
                 item.onclick = () => selectSvc(svc, item);
                 item.innerHTML = `
@@ -474,30 +648,21 @@
                 `;
                 list.appendChild(item);
             });
-
-            if (services.length > 0 && !selectedService) {
-                selectSvc(services[0], list.firstChild);
-            }
+            if (services.length > 0 && !selectedService) selectSvc(services[0], list.firstChild);
         }
 
         async function selectSvc(svc, element) {
             selectedService = svc;
             document.querySelectorAll('.service-item').forEach(el => el.classList.remove('active'));
             if (element) element.classList.add('active');
-            
-            // Refresh info from server for this specific service
             try {
                 const res = await fetch(`/api/services/${svc.name}`);
                 if (res.ok) {
                     const latestSvc = await res.json();
                     const idx = services.findIndex(s => s.name === svc.name);
-                    if (idx !== -1) {
-                        services[idx] = latestSvc;
-                    }
+                    if (idx !== -1) services[idx] = latestSvc;
                     selectedService = latestSvc;
                     svc = latestSvc;
-                    
-                    // Update sidebar item UI
                     if (element) {
                         element.innerHTML = `
                             <div class="service-name">📦 ${svc.name}</div>
@@ -508,10 +673,7 @@
                         `;
                     }
                 }
-            } catch (err) {
-                console.error("Failed to refresh service info:", err);
-            }
-
+            } catch (err) {}
             document.getElementById('deploy-msg').value = svc.last_commit;
             document.getElementById('terminal').innerText = `Ready to deploy ${svc.name}...`;
             validateForm();
@@ -521,15 +683,9 @@
         async function refreshSelectedService() {
             if (!selectedService) return;
             const btn = document.getElementById('btn-refresh-svc');
-            const originalText = btn.innerHTML;
-            btn.innerHTML = '...';
-            btn.disabled = true;
-            
-            const element = document.querySelector('.service-item.active');
-            await selectSvc(selectedService, element);
-            
-            btn.innerHTML = originalText;
-            btn.disabled = false;
+            btn.innerHTML = '...'; btn.disabled = true;
+            await selectSvc(selectedService, document.querySelector('.service-item.active'));
+            btn.innerHTML = '↻'; btn.disabled = false;
         }
 
         async function refreshHistoryBar() {
@@ -537,14 +693,11 @@
             const res = await fetch(`/api/history/${selectedService.name}`);
             const lastDeployText = document.getElementById('last-deploy-text');
             const btnMore = document.getElementById('btn-history-more');
-
             if (!res.ok) {
-                const err = await res.json();
-                lastDeployText.innerHTML = `<span style="color: var(--error)">Error loading history: ${err.error || 'Unknown error'}</span>`;
+                lastDeployText.innerHTML = `<span style="color: var(--error)">Error loading history</span>`;
                 btnMore.disabled = true;
                 return;
             }
-
             const logs = await res.json();
             if (logs && logs.length > 0) {
                 const latest = logs[0];
@@ -563,18 +716,10 @@
             if (!selectedService) return;
             document.getElementById('history-svc-name').innerText = selectedService.name;
             document.getElementById('history-modal-overlay').style.display = 'flex';
-            
             const list = document.getElementById('history-list');
             list.innerHTML = '<div class="shimmer" style="height: 50px"></div>'.repeat(3);
-            
             const res = await fetch(`/api/history/${selectedService.name}`);
-            if (!res.ok) {
-                const err = await res.json();
-                list.innerHTML = `<div style="text-align: center; padding: 20px; color: var(--error);">Error: ${err.error || 'Failed to fetch history'}</div>`;
-                return;
-            }
             const logs = await res.json();
-            
             list.innerHTML = '';
             logs.forEach(log => {
                 const row = document.createElement('div');
@@ -589,85 +734,44 @@
                 `;
                 list.appendChild(row);
             });
-            if (logs.length === 0) list.innerHTML = '<div style="text-align: center; padding: 20px; color: var(--text-dim);">No history found.</div>';
+            if (logs.length === 0) list.innerHTML = '<div style="text-align: center; padding: 20px;">No history found.</div>';
         }
 
-        function closeHistoryModal() {
-            document.getElementById('history-modal-overlay').style.display = 'none';
-        }
-
+        function closeHistoryModal() { document.getElementById('history-modal-overlay').style.display = 'none'; }
         function setEnv(env) {
             currentEnv = env;
-            document.querySelectorAll('.env-btn').forEach(btn => {
-                btn.classList.toggle('active', btn.innerText === env);
-            });
+            document.querySelectorAll('.env-btn').forEach(btn => btn.classList.toggle('active', btn.innerText === env));
             validateForm();
         }
-
         function validateForm() {
             const btn = document.getElementById('btn-run');
-            if (!selectedService) {
-                btn.disabled = true;
-                btn.innerText = 'Select a service';
-                return;
-            }
+            if (!selectedService) { btn.disabled = true; btn.innerText = 'Select a service'; return; }
             const hasScript = currentEnv === 'Development' ? selectedService.has_dev : selectedService.has_stg;
-            if (!hasScript) {
-                btn.disabled = true;
-                btn.innerText = `No ${currentEnv} script`;
-            } else {
-                btn.disabled = false;
-                btn.innerText = '🚀 Run Deploy';
-            }
+            btn.disabled = !hasScript; btn.innerText = hasScript ? '🚀 Run Deploy' : `No ${currentEnv} script`;
         }
 
         function runDeploy() {
             if (!selectedService) return;
-            
             const terminal = document.getElementById('terminal');
             const btn = document.getElementById('btn-run');
-            
-            terminal.innerText = '';
-            btn.disabled = true;
-            btn.innerText = 'Deploying...';
-
-            const msg = document.getElementById('deploy-msg').value;
-            
+            terminal.innerText = ''; btn.disabled = true; btn.innerText = 'Deploying...';
             fetch('/api/deploy', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    service: selectedService.name,
-                    env: currentEnv,
-                    message: msg
-                })
+                body: JSON.stringify({ service: selectedService.name, env: currentEnv, message: document.getElementById('deploy-msg').value })
             }).then(response => {
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
-
                 function read() {
                     reader.read().then(({done, value}) => {
-                        if (done) {
-                            btn.disabled = false;
-                            btn.innerText = '🚀 Run Deploy';
-                            return;
-                        }
+                        if (done) { btn.disabled = false; btn.innerText = '🚀 Run Deploy'; return; }
                         const chunk = decoder.decode(value, {stream: true});
-                        const events = chunk.split('\n\n');
-                        events.forEach(event => {
+                        chunk.split('\n\n').forEach(event => {
                             const trimmed = event.trimStart();
                             if (trimmed.startsWith('data: ')) {
                                 const content = trimmed.slice(6);
-                                if (content.trim() === '[EOF]') {
-                                    btn.disabled = false;
-                                    btn.innerText = '🚀 Run Deploy';
-                                    refreshHistoryBar();
-                                } else {
-                                    // Add newline if missing so lines don't merge
-                                    const line = content.endsWith('\n') ? content : content + '\n';
-                                    terminal.innerText += line;
-                                    terminal.scrollTop = terminal.scrollHeight;
-                                }
+                                if (content.trim() === '[EOF]') { btn.disabled = false; btn.innerText = '🚀 Run Deploy'; refreshHistoryBar(); }
+                                else { terminal.innerText += content.endsWith('\n') ? content : content + '\n'; terminal.scrollTop = terminal.scrollHeight; }
                             }
                         });
                         read();
@@ -681,169 +785,55 @@
         function closeSettings() { document.getElementById('modal-overlay').style.display = 'none'; }
 
         let charts = {};
-
         async function openStats() {
             document.getElementById('stats-modal-overlay').style.display = 'flex';
             const res = await fetch('/api/stats');
             const data = await res.json();
             renderCharts(data);
         }
-
-        function closeStats() {
-            document.getElementById('stats-modal-overlay').style.display = 'none';
-        }
+        function closeStats() { document.getElementById('stats-modal-overlay').style.display = 'none'; }
 
         function renderCharts(data) {
             const style = getComputedStyle(document.body);
-            const isLight = document.body.classList.contains('light-theme');
             const textColor = style.getPropertyValue('--text-main').trim();
             const gridColor = style.getPropertyValue('--border').trim();
             const accentColor = style.getPropertyValue('--accent').trim();
             const palette = [accentColor, '#3fb950', '#2f81f7', '#a371f7', '#ff7b72', '#d29922', '#79c0ff'];
-
-            // Destroy existing charts if any
             Object.values(charts).forEach(c => c.destroy());
-
-            // 1. Total Trends Chart
-            const dates = [];
-            const rawDates = [];
-            const now = new Date();
+            const dates = []; const rawDates = []; const now = new Date();
             for (let i = 29; i >= 0; i--) {
-                const d = new Date();
-                d.setDate(now.getDate() - i);
-                const ds = d.toISOString().split('T')[0];
-                rawDates.push(ds);
-                dates.push(ds.substring(5)); // MM-DD
+                const d = new Date(); d.setDate(now.getDate() - i);
+                const ds = d.toISOString().split('T')[0]; rawDates.push(ds); dates.push(ds.substring(5));
             }
-
             charts.trends = new Chart(document.getElementById('chart-trends'), {
                 type: 'line',
-                data: {
-                    labels: dates,
-                    datasets: [{
-                        label: 'Deployments',
-                        data: rawDates.map(d => data.by_day[d] || 0),
-                        borderColor: accentColor,
-                        backgroundColor: accentColor + '22',
-                        fill: true, tension: 0.4, borderWidth: 3, pointRadius: 0
-                    }]
-                },
-                options: {
-                    responsive: true, maintainAspectRatio: false,
-                    plugins: { legend: { display: false } },
-                    scales: {
-                        x: { grid: { display: false }, ticks: { color: textColor, font: { size: 10 } } },
-                        y: { grid: { color: gridColor }, ticks: { color: textColor, stepSize: 1 }, beginAtZero: true }
-                    }
-                }
+                data: { labels: dates, datasets: [{ label: 'Deployments', data: rawDates.map(d => data.by_day[d] || 0), borderColor: accentColor, backgroundColor: accentColor + '22', fill: true, tension: 0.4, borderWidth: 3, pointRadius: 0 }] },
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { grid: { display: false }, ticks: { color: textColor, font: { size: 10 } } }, y: { grid: { color: gridColor }, ticks: { color: textColor, stepSize: 1 }, beginAtZero: true } } }
             });
-
-            // 2. User Chart
-            const userLabels = Object.keys(data.by_user);
-            const userData = Object.values(data.by_user);
             charts.user = new Chart(document.getElementById('chart-user'), {
                 type: 'pie',
-                data: {
-                    labels: userLabels,
-                    datasets: [{
-                        data: userData,
-                        backgroundColor: palette,
-                        borderWidth: 0
-                    }]
-                },
-                options: {
-                    responsive: true, maintainAspectRatio: false,
-                    plugins: { 
-                        legend: { position: 'right', labels: { color: textColor, boxWidth: 10, font: { size: 10 } } } 
-                    }
-                }
+                data: { labels: Object.keys(data.by_user), datasets: [{ data: Object.values(data.by_user), backgroundColor: palette, borderWidth: 0 }] },
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { color: textColor, boxWidth: 10, font: { size: 10 } } } } }
             });
-
-            // 3. Service Trends (Line Chart - No Stack, No Fill)
             const servicesFound = [...new Set(data.by_service_day.map(item => item.service))];
-            const datasets = servicesFound.map((svc, idx) => {
-                const color = palette[idx % palette.length];
-                return {
-                    label: svc,
-                    data: rawDates.map(d => {
-                        const found = data.by_service_day.find(item => item.service === svc && item.day === d);
-                        return found ? found.count : 0;
-                    }),
-                    borderColor: color,
-                    fill: false,
-                    tension: 0.4,
-                    pointRadius: 3,
-                    borderWidth: 2
-                };
-            });
-
             charts.serviceStacked = new Chart(document.getElementById('chart-service-stacked'), {
                 type: 'line',
-                data: { labels: dates, datasets: datasets },
-                options: {
-                    responsive: true, maintainAspectRatio: false,
-                    plugins: { 
-                        legend: { position: 'top', labels: { color: textColor, boxWidth: 10, font: { size: 10 } } } 
-                    },
-                    scales: {
-                        x: { grid: { display: false }, ticks: { color: textColor, font: { size: 10 } } },
-                        y: { grid: { color: gridColor }, ticks: { color: textColor }, beginAtZero: true }
-                    }
-                }
+                data: { labels: dates, datasets: servicesFound.map((svc, idx) => ({ label: svc, data: rawDates.map(d => (data.by_service_day.find(item => item.service === svc && item.day === d) || {count:0}).count), borderColor: palette[idx % palette.length], fill: false, tension: 0.4, pointRadius: 3, borderWidth: 2 })) },
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'top', labels: { color: textColor, boxWidth: 10, font: { size: 10 } } } }, scales: { x: { grid: { display: false }, ticks: { color: textColor, font: { size: 10 } } }, y: { grid: { color: gridColor }, ticks: { color: textColor }, beginAtZero: true } } }
             });
-
-            // 4. Env Chart
-            const envLabels = Object.keys(data.by_environment);
-            const envData = Object.values(data.by_environment);
             charts.env = new Chart(document.getElementById('chart-env'), {
                 type: 'doughnut',
-                data: {
-                    labels: envLabels,
-                    datasets: [{
-                        data: envData,
-                        backgroundColor: palette,
-                        borderWidth: 0
-                    }]
-                },
-                options: {
-                    responsive: true, maintainAspectRatio: false,
-                    plugins: { 
-                        legend: { position: 'bottom', labels: { color: textColor, boxWidth: 12, font: { size: 11 } } } 
-                    },
-                    cutout: '70%'
-                }
+                data: { labels: Object.keys(data.by_environment), datasets: [{ data: Object.values(data.by_environment), backgroundColor: palette, borderWidth: 0 }] },
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { color: textColor, boxWidth: 12, font: { size: 11 } } } }, cutout: '70%' }
             });
-
-            // 5. Total Service Chart
-            const svcLabels = Object.keys(data.by_service);
-            const svcData = Object.values(data.by_service);
             charts.service = new Chart(document.getElementById('chart-service'), {
                 type: 'bar',
-                data: {
-                    labels: svcLabels,
-                    datasets: [{
-                        data: svcData,
-                        backgroundColor: accentColor,
-                        borderRadius: 6
-                    }]
-                },
-                options: {
-                    responsive: true, maintainAspectRatio: false,
-                    plugins: { legend: { display: false } },
-                    scales: {
-                        x: { grid: { display: false }, ticks: { color: textColor, font: { size: 10 } } },
-                        y: { grid: { color: gridColor }, ticks: { color: textColor }, beginAtZero: true }
-                    }
-                }
+                data: { labels: Object.keys(data.by_service), datasets: [{ data: Object.values(data.by_service), backgroundColor: accentColor, borderRadius: 6 }] },
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { grid: { display: false }, ticks: { color: textColor, font: { size: 10 } } }, y: { grid: { color: gridColor }, ticks: { color: textColor }, beginAtZero: true } } }
             });
         }
 
         init();
-
-        // Color picker listener
-        document.getElementById('set-accent').addEventListener('input', (e) => {
-            document.getElementById('accent-hex').innerText = e.target.value.toUpperCase();
-        });
     </script>
 </body>
 </html>

@@ -31,13 +31,21 @@ import (
 // Models
 // ─────────────────────────────────────────────
 
+type ThemeColors struct {
+	Accent       string `json:"accent"`
+	TextMain     string `json:"text_main"`
+	TextDim      string `json:"text_dim"`
+	TerminalText string `json:"terminal_text"`
+}
+
 type Settings struct {
-	UserName     string `json:"user_name"`
-	GitBashPath  string `json:"git_bash_path"`
-	WorkspaceURL string `json:"workspace_url"`
-	PreDeployCmd string `json:"pre_deploy_cmd"`
-	GoPrivate    string `json:"go_private"`
-	AccentColor  string `json:"accent_color"`
+	UserName     string      `json:"user_name"`
+	GitBashPath  string      `json:"git_bash_path"`
+	WorkspaceURL string      `json:"workspace_url"`
+	PreDeployCmd string      `json:"pre_deploy_cmd"`
+	GoPrivate    string      `json:"go_private"`
+	DarkTheme    ThemeColors `json:"dark_theme"`
+	LightTheme   ThemeColors `json:"light_theme"`
 }
 
 type Service struct {
@@ -105,7 +113,18 @@ func loadSettings() Settings {
 		WorkspaceURL: filepath.Dir(basePath),
 		PreDeployCmd: "",
 		GoPrivate:    "gitlab.com/bship1/*",
-		AccentColor:  "#f85149", // Default GitHub Red
+		DarkTheme: ThemeColors{
+			Accent:       "#f85149",
+			TextMain:     "#e6edf3",
+			TextDim:      "#8b949e",
+			TerminalText: "#f8fafc",
+		},
+		LightTheme: ThemeColors{
+			Accent:       "#10b981",
+			TextMain:     "#1a1c1e",
+			TextDim:      "#64748b",
+			TerminalText: "#f8fafc",
+		},
 	}
 
 	f, err := os.Open(getSettingsPath())
