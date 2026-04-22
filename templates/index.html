@@ -3,26 +3,56 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Service Deploy Commander | Web</title>
+    <title>Internal Deploy System | Web</title>
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
         :root {
+            /* Dark Theme (Default) */
             --bg-body: #010409;
             --bg-card: #0d1117;
             --bg-hover: #161b22;
             --border: #30363d;
             --text-main: #e6edf3;
             --text-dim: #8b949e;
-            --accent: #2f81f7;
-            --accent-glow: rgba(47, 129, 247, 0.3);
+            --accent: #238636;
+            --accent-glow: rgba(35, 134, 54, 0.3);
             --success: #3fb950;
             --error: #f85149;
             --font-main: 'Outfit', sans-serif;
             --font-mono: 'JetBrains Mono', monospace;
+            --terminal-bg: #050505;
+            --terminal-text: #f8fafc;
+            --header-bg: rgba(13, 17, 23, 0.8);
+            --modal-overlay: rgba(0, 0, 0, 0.8);
         }
+
+        body.light-theme {
+            --bg-body: #f3f7f4;
+            --bg-card: #ffffff;
+            --bg-hover: #f1f5f9;
+            --border: #e2e8f0;
+            --text-main: #1a1c1e;
+            --text-dim: #64748b;
+            --accent: #10b981;
+            --accent-glow: rgba(16, 185, 129, 0.1);
+            --success: #059669;
+            --error: #ef4444;
+            --terminal-bg: #050505;
+            --terminal-text: #f8fafc;
+            --header-bg: rgba(255, 255, 255, 0.8);
+            --modal-overlay: rgba(15, 23, 42, 0.5);
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+        .light-theme::-webkit-scrollbar-thumb { background: #d1d5db; }
+        .light-theme::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
 
         * { box-sizing: border-box; }
         body {
@@ -34,6 +64,7 @@
             display: flex;
             flex-direction: column;
             overflow: hidden;
+            transition: background-color 0.3s, color 0.3s;
         }
 
         /* Top Bar */
@@ -43,12 +74,13 @@
             justify-content: space-between;
             align-items: center;
             border-bottom: 1px solid var(--border);
-            background: rgba(13, 17, 23, 0.8);
+            background: var(--header-bg);
             backdrop-filter: blur(8px);
             z-index: 100;
         }
         .logo { font-size: 20px; font-weight: 700; display: flex; align-items: center; gap: 10px; }
         .logo span { color: var(--accent); }
+        .light-theme .logo { color: #064e3b; }
 
         .header-actions { display: flex; gap: 12px; }
         
@@ -65,9 +97,12 @@
             align-items: center;
             gap: 8px;
         }
+        .light-theme button { background: #ffffff; }
         button:hover { background: var(--border); border-color: var(--text-dim); transform: translateY(-1px); }
-        button.primary { background: var(--accent); border-color: var(--accent); }
-        button.primary:hover { background: #4a94ff; box-shadow: 0 0 15px var(--accent-glow); }
+        .light-theme button:hover { background: var(--bg-hover); border-color: var(--accent); }
+        
+        button.primary { background: var(--accent); border-color: var(--accent); color: white; }
+        button.primary:hover { background: var(--success); box-shadow: 0 4px 12px var(--accent-glow); }
         button:disabled { opacity: 0.5; cursor: not-allowed; transform: none !important; }
 
         /* Layout */
@@ -84,25 +119,39 @@
             display: flex;
             flex-direction: column;
             background: var(--bg-card);
-            min-height: 0; /* Critical for inner scrolling */
+            min-height: 0;
         }
         .sidebar-header { padding: 20px 24px 10px; font-size: 11px; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; flex-shrink: 0; }
-        #service-list { flex: 1; overflow-y: auto; padding: 0 12px; min-height: 0; }
+        #service-list { flex: 1; overflow-y: auto; padding: 0 12px; min-height: 0; scrollbar-gutter: stable; }
         .service-item {
-            padding: 12px 16px;
-            margin-bottom: 4px;
-            border-radius: 8px;
+            padding: 14px 16px;
+            margin-bottom: 6px;
+            border-radius: 10px;
             cursor: pointer;
             transition: all 0.2s;
             display: flex;
             flex-direction: column;
-            gap: 4px;
+            gap: 6px;
+            border: 1px solid transparent;
         }
-        .service-item:hover { background: var(--bg-hover); }
-        .service-item.active { background: var(--accent-glow); color: white; border: 1px solid var(--accent); }
-        .service-name { font-weight: 600; font-size: 15px; }
-        .service-meta { font-size: 12px; color: var(--text-dim); display: flex; align-items: center; gap: 8px; }
-        .branch-tag { color: var(--accent); font-family: var(--font-mono); font-size: 11px; }
+        .service-item:hover { background: var(--bg-hover); border-color: var(--border); }
+        .service-item.active { background: var(--accent-glow); color: var(--text-main); border: 1px solid var(--accent); }
+        .service-name { font-weight: 700; font-size: 15px; }
+        .service-meta { 
+            font-size: 11px; 
+            color: var(--text-dim); 
+            display: flex; 
+            flex-direction: column;
+            gap: 2px;
+        }
+        .branch-tag { color: var(--accent); font-family: var(--font-mono); font-size: 11px; font-weight: 600; opacity: 0.9; }
+        .commit-msg { 
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 100%;
+            display: block;
+        }
 
         /* Content Area */
         #content {
@@ -118,16 +167,17 @@
             border: 1px solid var(--border);
             border-radius: 12px;
             padding: 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
         }
 
         .label { font-size: 11px; font-weight: 700; color: var(--text-dim); text-transform: uppercase; margin-bottom: 8px; }
         
-        .env-selector { display: flex; gap: 8px; background: var(--bg-body); padding: 4px; border-radius: 8px; width: fit-content; }
+        .env-selector { display: flex; gap: 8px; background: var(--bg-body); padding: 4px; border-radius: 8px; width: fit-content; border: 1px solid var(--border); }
         .env-btn { 
             padding: 6px 16px; border-radius: 6px; border: none; background: transparent; color: var(--text-dim);
             font-size: 13px; font-weight: 600; cursor: pointer; transition: 0.2s;
         }
-        .env-btn.active { background: var(--bg-hover); color: var(--text-main); box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
+        .env-btn.active { background: var(--bg-card); color: var(--accent); box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
 
         input {
             width: 100%;
@@ -138,37 +188,39 @@
             border-radius: 8px;
             font-family: inherit;
             outline: none;
-            transition: border-color 0.2s;
+            transition: all 0.2s;
         }
-        input:focus { border-color: var(--accent); }
+        input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
 
         /* Log Terminal */
         .terminal-container { flex: 1; display: flex; flex-direction: column; min-height: 0; }
         #terminal {
             flex: 1;
-            background: #010409;
+            background: var(--terminal-bg);
             border: 1px solid var(--border);
             border-radius: 8px;
             padding: 16px;
             font-family: var(--font-mono);
-            font-size: 12px;
+            font-size: 14px;
             line-height: 1.6;
-            color: #d1d5da;
+            color: var(--terminal-text);
             overflow-y: auto;
             white-space: pre-wrap;
             word-break: break-all;
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
         }
 
         /* Modal Settings */
         #modal-overlay {
             position: fixed; top: 0; left:0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.8); display: none; justify-content: center; align-items: center; z-index: 1000;
+            background: var(--modal-overlay); backdrop-filter: blur(4px); display: none; justify-content: center; align-items: center; z-index: 1000;
         }
         .modal {
             background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px;
             width: 500px; padding: 24px; display: flex; flex-direction: column; gap: 16px;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
         }
-        .modal-header { font-size: 18px; font-weight: 700; border-bottom: 1px solid var(--border); padding-bottom: 12px; }
+        .modal-header { font-size: 18px; font-weight: 700; border-bottom: 1px solid var(--border); padding-bottom: 12px; color: var(--accent); }
         .modal-footer { display: flex; justify-content: flex-end; gap: 12px; margin-top: 10px; }
 
         /* Info Bar */
@@ -181,8 +233,9 @@
 </head>
 <body>
     <header>
-        <div class="logo"><img src="/favicon.ico" alt="Logo" style="width: 24px; height: 24px;"> <span>Deploy</span> Commander</div>
+        <div class="logo"><img src="/favicon.ico" alt="Logo" style="width: 24px; height: 24px;"> <span>Internal</span> Deploy System</div>
         <div class="header-actions">
+            <button id="theme-toggle" onclick="toggleTheme()">🌓 Theme</button>
             <button onclick="openSettings()">⚙️ Settings</button>
             <button onclick="refreshServices()">↻ Refresh</button>
         </div>
@@ -278,8 +331,22 @@
         let settings = {};
 
         async function init() {
+            initTheme();
             await loadSettings();
             await refreshServices();
+        }
+
+        function initTheme() {
+            const savedTheme = localStorage.getItem('theme');
+            if (savedTheme === 'light') {
+                document.body.classList.add('light-theme');
+            }
+        }
+
+        function toggleTheme() {
+            document.body.classList.toggle('light-theme');
+            const isLight = document.body.classList.contains('light-theme');
+            localStorage.setItem('theme', isLight ? 'light' : 'dark');
         }
 
         async function loadSettings() {
@@ -325,9 +392,8 @@
                 item.innerHTML = `
                     <div class="service-name">📦 ${svc.name}</div>
                     <div class="service-meta">
-                        <span class="branch-tag">${svc.branch}</span>
-                        <span>•</span>
-                        <span>${svc.last_commit.substring(0, 30)}${svc.last_commit.length > 30 ? '...' : ''}</span>
+                        <div class="branch-tag">👀 Branch: ${svc.branch}</div>
+                        <div class="commit-msg">💬 Last commit: ${svc.last_commit}</div>
                     </div>
                 `;
                 list.appendChild(item);
