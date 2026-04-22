@@ -419,67 +419,8 @@ func scanServices(s Settings) []Service {
 	}
 
 	for _, entry := range entries {
-		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
-			continue
-		}
-
-		path := filepath.Join(workspaceURL, entry.Name())
-
-		devScript := ""
-		stgScript := ""
-
-		candidates := []string{
-			filepath.Join(path, "deploy-dev.sh"),
-			filepath.Join(path, "scripts", "deploy-dev.sh"),
-		}
-		for _, c := range candidates {
-			if _, err := os.Stat(c); err == nil {
-				devScript = c
-				break
-			}
-		}
-
-		candidates = []string{
-			filepath.Join(path, "deploy-stg.sh"),
-			filepath.Join(path, "scripts", "deploy-stg.sh"),
-		}
-		for _, c := range candidates {
-			if _, err := os.Stat(c); err == nil {
-				stgScript = c
-				break
-			}
-		}
-
-		if devScript != "" || stgScript != "" {
-			branch := "unknown"
-			// Use -c safe.directory=* to avoid ownership issues when running as service
-			cmd := exec.Command(gitPath, "-c", "safe.directory=*", "rev-parse", "--abbrev-ref", "HEAD")
-			cmd.Dir = path
-			if out, err := cmd.CombinedOutput(); err == nil {
-				branch = strings.TrimSpace(string(out))
-			} else {
-				log.Printf("[Scan] Git error (branch) in %s: %v, output: %s", entry.Name(), err, string(out))
-			}
-
-			lastCommit := ""
-			cmd = exec.Command(gitPath, "-c", "safe.directory=*", "log", "-1", "--pretty=%s")
-			cmd.Dir = path
-			if out, err := cmd.CombinedOutput(); err == nil {
-				lastCommit = strings.TrimSpace(string(out))
-			} else {
-				log.Printf("[Scan] Git error (log) in %s: %v, output: %s", entry.Name(), err, string(out))
-			}
-
-			services = append(services, Service{
-				Name:       entry.Name(),
-				Dir:        path,
-				Branch:     branch,
-				LastCommit: lastCommit,
-				HasDev:     devScript != "",
-				HasStg:     stgScript != "",
-				DevScript:  devScript,
-				StgScript:  stgScript,
-			})
+		if svc := getServiceInfo(workspaceURL, entry.Name(), gitPath); svc != nil {
+			services = append(services, *svc)
 		}
 	}
 
@@ -488,6 +429,68 @@ func scanServices(s Settings) []Service {
 	})
 
 	return services
+}
+
+func getServiceInfo(workspaceURL, name, gitPath string) *Service {
+	path := filepath.Join(workspaceURL, name)
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() || strings.HasPrefix(name, ".") {
+		return nil
+	}
+
+	devScript := ""
+	stgScript := ""
+
+	candidates := []string{
+		filepath.Join(path, "deploy-dev.sh"),
+		filepath.Join(path, "scripts", "deploy-dev.sh"),
+	}
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			devScript = c
+			break
+		}
+	}
+
+	candidates = []string{
+		filepath.Join(path, "deploy-stg.sh"),
+		filepath.Join(path, "scripts", "deploy-stg.sh"),
+	}
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			stgScript = c
+			break
+		}
+	}
+
+	if devScript == "" && stgScript == "" {
+		return nil
+	}
+
+	branch := "unknown"
+	cmd := exec.Command(gitPath, "-c", "safe.directory=*", "rev-parse", "--abbrev-ref", "HEAD")
+	cmd.Dir = path
+	if out, err := cmd.CombinedOutput(); err == nil {
+		branch = strings.TrimSpace(string(out))
+	}
+
+	lastCommit := ""
+	cmd = exec.Command(gitPath, "-c", "safe.directory=*", "log", "-1", "--pretty=%s")
+	cmd.Dir = path
+	if out, err := cmd.CombinedOutput(); err == nil {
+		lastCommit = strings.TrimSpace(string(out))
+	}
+
+	return &Service{
+		Name:       name,
+		Dir:        path,
+		Branch:     branch,
+		LastCommit: lastCommit,
+		HasDev:     devScript != "",
+		HasStg:     stgScript != "",
+		DevScript:  devScript,
+		StgScript:  stgScript,
+	}
 }
 
 // ─────────────────────────────────────────────
@@ -525,6 +528,116 @@ func servicesHandler(w http.ResponseWriter, r *http.Request) {
 	services := scanServices(s)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(services)
+}
+
+func serviceHandler(w http.ResponseWriter, r *http.Request) {
+	serviceName := r.PathValue("service_name")
+	if serviceName == "" {
+		http.Error(w, "Service name required", http.StatusBadRequest)
+		return
+	}
+
+	s := loadSettings()
+	gitPath := getGitPath(s)
+	svc := getServiceInfo(s.WorkspaceURL, serviceName, gitPath)
+	if svc == nil {
+		http.Error(w, "Service not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(svc)
+}
+
+func statsHandler(w http.ResponseWriter, r *http.Request) {
+	db, err := getDB()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Stats by Service
+	rowsS, _ := db.Query("SELECT service, COUNT(*) FROM deployments GROUP BY service")
+	defer rowsS.Close()
+	byService := make(map[string]int)
+	for rowsS.Next() {
+		var s string
+		var c int
+		rowsS.Scan(&s, &c)
+		byService[s] = c
+	}
+
+	// Stats by Environment
+	rowsE, _ := db.Query("SELECT environment, COUNT(*) FROM deployments GROUP BY environment")
+	defer rowsE.Close()
+	byEnv := make(map[string]int)
+	for rowsE.Next() {
+		var e string
+		var c int
+		rowsE.Scan(&e, &c)
+		byEnv[e] = c
+	}
+
+	// Stats by Day (Last 30 days)
+	rowsD, _ := db.Query(`
+		SELECT DATE_FORMAT(created_at, '%Y-%m-%d') as day, COUNT(*) 
+		FROM deployments 
+		WHERE created_at > DATE_SUB(NOW(), INTERVAL 30 DAY)
+		GROUP BY day 
+		ORDER BY day ASC
+	`)
+	defer rowsD.Close()
+	byDay := make(map[string]int)
+	for rowsD.Next() {
+		var d string
+		var c int
+		rowsD.Scan(&d, &c)
+		byDay[d] = c
+	}
+
+	// Stats by User
+	rowsU, _ := db.Query("SELECT user_name, COUNT(*) FROM deployments GROUP BY user_name")
+	defer rowsU.Close()
+	byUser := make(map[string]int)
+	for rowsU.Next() {
+		var u string
+		var c int
+		rowsU.Scan(&u, &c)
+		if u == "" {
+			u = "Unknown"
+		}
+		byUser[u] = c
+	}
+
+	// Stats by Service per Day (Last 30 days)
+	rowsSD, _ := db.Query(`
+		SELECT service, DATE_FORMAT(created_at, '%Y-%m-%d') as day, COUNT(*) 
+		FROM deployments 
+		WHERE created_at > DATE_SUB(NOW(), INTERVAL 30 DAY)
+		GROUP BY service, day 
+		ORDER BY day ASC
+	`)
+	defer rowsSD.Close()
+	type SvcDay struct {
+		Service string `json:"service"`
+		Day     string `json:"day"`
+		Count   int    `json:"count"`
+	}
+	var byServiceDay []SvcDay
+	for rowsSD.Next() {
+		var sd SvcDay
+		rowsSD.Scan(&sd.Service, &sd.Day, &sd.Count)
+		byServiceDay = append(byServiceDay, sd)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"by_service":     byService,
+		"by_environment": byEnv,
+		"by_day":         byDay,
+		"by_user":        byUser,
+		"by_service_day": byServiceDay,
+	})
 }
 
 func historyHandler(w http.ResponseWriter, r *http.Request) {
@@ -755,7 +868,9 @@ func main() {
 	mux.HandleFunc("GET /api/settings", settingsHandler)
 	mux.HandleFunc("POST /api/settings", settingsHandler)
 	mux.HandleFunc("GET /api/services", servicesHandler)
+	mux.HandleFunc("GET /api/services/{service_name}", serviceHandler)
 	mux.HandleFunc("GET /api/history/{service_name}", historyHandler)
+	mux.HandleFunc("GET /api/stats", statsHandler)
 	mux.HandleFunc("POST /api/deploy", deployHandler)
 
 	// Static files

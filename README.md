@@ -30,6 +30,10 @@ deploy-tool/
 - **Premium UI**: Modern dark-mode interface with glassmorphism effects, rhythmic animations, and responsive design.
 - **Real-time Logging**: Uses Server-Sent Events (SSE) to stream deployment logs directly to your browser.
 - **Service Scanning**: Automatically detects services in your workspace containing `deploy-dev.sh` or `deploy-stg.sh`.
+- **Dynamic Refresh**: 
+    - **Global Refresh**: Refresh the entire service list from the header.
+    - **Contextual Refresh**: Automatically fetches the latest Git information (branch, last commit) when selecting a service.
+    - **Manual Service Refresh**: Dedicated button within the service card for targeted updates without reloading the entire list.
 - **Persistent DB/SSH Connection**: Optimized connection management with built-in auto-reconnect and SSH tunnel pooling (available in Go and Python).
 - **Service-Ready**: Enhanced compatibility for running as a Windows Service (NSSM), including automatic path detection and Git ownership fix (`safe.directory`).
 - **Auto Timezone Adjustment**: Automatically displays history in local timezone (GMT+7).

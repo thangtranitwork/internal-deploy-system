@@ -8,6 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
             /* Dark Theme (Default) */
@@ -17,8 +18,8 @@
             --border: #30363d;
             --text-main: #e6edf3;
             --text-dim: #8b949e;
-            --accent: #238636;
-            --accent-glow: rgba(35, 134, 54, 0.3);
+            --accent: #f85149;
+            --accent-glow: rgba(248, 81, 73, 0.3);
             --success: #3fb950;
             --error: #f85149;
             --font-main: 'Outfit', sans-serif;
@@ -236,6 +237,7 @@
         <div class="logo"><img src="/favicon.ico" alt="Logo" style="width: 24px; height: 24px;"> <span>Internal</span> Deploy System</div>
         <div class="header-actions">
             <button id="theme-toggle" onclick="toggleTheme()">🌓 Theme</button>
+            <button onclick="openStats()">📊 Statistics</button>
             <button onclick="openSettings()">⚙️ Settings</button>
             <button onclick="refreshServices()">↻ Refresh</button>
         </div>
@@ -266,7 +268,8 @@
                         <div class="label">Deploy Message</div>
                         <input type="text" id="deploy-msg" placeholder="Deployment description...">
                     </div>
-                    <div>
+                    <div style="display: flex; gap: 8px;">
+                        <button id="btn-refresh-svc" title="Refresh Service Info" style="height: 42px; padding: 0 12px;" onclick="refreshSelectedService()">↻</button>
                         <button id="btn-run" class="primary" style="height: 42px; padding: 0 24px;" onclick="runDeploy()">🚀 Run Deploy</button>
                     </div>
                 </div>
@@ -294,6 +297,45 @@
             </div>
             <div class="modal-footer">
                 <button onclick="closeHistoryModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Stats Modal -->
+    <div id="stats-modal-overlay" class="modal-overlay" style="position: fixed; top: 0; left:0; width: 100%; height: 100%; background: var(--modal-overlay); backdrop-filter: blur(4px); display: none; justify-content: center; align-items: center; z-index: 1000;">
+        <div class="modal" style="width: 1100px; max-height: 90vh; overflow-y: auto; display: flex; flex-direction: column;">
+            <div class="modal-header">📊 Advanced Deployment Analytics</div>
+            <div id="stats-content" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 24px; padding: 10px 0;">
+                
+                <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 20px;">
+                    <div class="card" style="padding: 16px;">
+                        <div class="label">Total Deployment Trends (30 Days)</div>
+                        <div style="height: 250px;"><canvas id="chart-trends"></canvas></div>
+                    </div>
+                    <div class="card" style="padding: 16px;">
+                        <div class="label">Top Users</div>
+                        <div style="height: 250px;"><canvas id="chart-user"></canvas></div>
+                    </div>
+                </div>
+
+                <div class="card" style="padding: 16px;">
+                    <div class="label">Service Deployments per Day (Stacked)</div>
+                    <div style="height: 350px;"><canvas id="chart-service-stacked"></canvas></div>
+                </div>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                    <div class="card" style="padding: 16px;">
+                        <div class="label">Environment Split</div>
+                        <div style="height: 250px;"><canvas id="chart-env"></canvas></div>
+                    </div>
+                    <div class="card" style="padding: 16px;">
+                        <div class="label">Total Activity by Service</div>
+                        <div style="height: 250px;"><canvas id="chart-service"></canvas></div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button onclick="closeStats()">Close</button>
             </div>
         </div>
     </div>
@@ -334,6 +376,7 @@
             initTheme();
             await loadSettings();
             await refreshServices();
+            setInterval(refreshServices, 60000);
         }
 
         function initTheme() {
@@ -379,15 +422,25 @@
 
         async function refreshServices() {
             const list = document.getElementById('service-list');
-            list.innerHTML = '<div class="service-item shimmer" style="height: 60px"></div>'.repeat(3);
+            // Only show shimmer on first load
+            if (list.innerHTML === '') {
+                list.innerHTML = '<div class="service-item shimmer" style="height: 60px"></div>'.repeat(3);
+            }
             
             const res = await fetch('/api/services');
-            services = await res.json();
+            const newServices = await res.json();
+            services = newServices;
             
+            const currentSelectedName = selectedService ? selectedService.name : null;
             list.innerHTML = '';
+            
             services.forEach(svc => {
                 const item = document.createElement('div');
                 item.className = 'service-item';
+                if (currentSelectedName === svc.name) {
+                    item.classList.add('active');
+                    selectedService = svc; // Update reference with new data
+                }
                 item.onclick = () => selectSvc(svc, item);
                 item.innerHTML = `
                     <div class="service-name">📦 ${svc.name}</div>
@@ -404,15 +457,56 @@
             }
         }
 
-        function selectSvc(svc, element) {
+        async function selectSvc(svc, element) {
             selectedService = svc;
             document.querySelectorAll('.service-item').forEach(el => el.classList.remove('active'));
-            element.classList.add('active');
+            if (element) element.classList.add('active');
             
+            // Refresh info from server for this specific service
+            try {
+                const res = await fetch(`/api/services/${svc.name}`);
+                if (res.ok) {
+                    const latestSvc = await res.json();
+                    const idx = services.findIndex(s => s.name === svc.name);
+                    if (idx !== -1) {
+                        services[idx] = latestSvc;
+                    }
+                    selectedService = latestSvc;
+                    svc = latestSvc;
+                    
+                    // Update sidebar item UI
+                    if (element) {
+                        element.innerHTML = `
+                            <div class="service-name">📦 ${svc.name}</div>
+                            <div class="service-meta">
+                                <div class="branch-tag">👀 Branch: ${svc.branch}</div>
+                                <div class="commit-msg">💬 Last commit: ${svc.last_commit}</div>
+                            </div>
+                        `;
+                    }
+                }
+            } catch (err) {
+                console.error("Failed to refresh service info:", err);
+            }
+
             document.getElementById('deploy-msg').value = svc.last_commit;
             document.getElementById('terminal').innerText = `Ready to deploy ${svc.name}...`;
             validateForm();
             refreshHistoryBar();
+        }
+
+        async function refreshSelectedService() {
+            if (!selectedService) return;
+            const btn = document.getElementById('btn-refresh-svc');
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '...';
+            btn.disabled = true;
+            
+            const element = document.querySelector('.service-item.active');
+            await selectSvc(selectedService, element);
+            
+            btn.innerHTML = originalText;
+            btn.disabled = false;
         }
 
         async function refreshHistoryBar() {
@@ -562,6 +656,159 @@
 
         function openSettings() { document.getElementById('modal-overlay').style.display = 'flex'; }
         function closeSettings() { document.getElementById('modal-overlay').style.display = 'none'; }
+
+        let charts = {};
+
+        async function openStats() {
+            document.getElementById('stats-modal-overlay').style.display = 'flex';
+            const res = await fetch('/api/stats');
+            const data = await res.json();
+            renderCharts(data);
+        }
+
+        function closeStats() {
+            document.getElementById('stats-modal-overlay').style.display = 'none';
+        }
+
+        function renderCharts(data) {
+            const style = getComputedStyle(document.body);
+            const isLight = document.body.classList.contains('light-theme');
+            const textColor = style.getPropertyValue('--text-main').trim();
+            const gridColor = style.getPropertyValue('--border').trim();
+            const accentColor = style.getPropertyValue('--accent').trim();
+            const palette = [accentColor, '#3fb950', '#2f81f7', '#a371f7', '#ff7b72', '#d29922', '#79c0ff'];
+
+            // Destroy existing charts if any
+            Object.values(charts).forEach(c => c.destroy());
+
+            // 1. Total Trends Chart
+            const dates = [];
+            const rawDates = [];
+            const now = new Date();
+            for (let i = 29; i >= 0; i--) {
+                const d = new Date();
+                d.setDate(now.getDate() - i);
+                const ds = d.toISOString().split('T')[0];
+                rawDates.push(ds);
+                dates.push(ds.substring(5)); // MM-DD
+            }
+
+            charts.trends = new Chart(document.getElementById('chart-trends'), {
+                type: 'line',
+                data: {
+                    labels: dates,
+                    datasets: [{
+                        label: 'Deployments',
+                        data: rawDates.map(d => data.by_day[d] || 0),
+                        borderColor: accentColor,
+                        backgroundColor: accentColor + '22',
+                        fill: true, tension: 0.4, borderWidth: 3, pointRadius: 0
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { grid: { display: false }, ticks: { color: textColor, font: { size: 10 } } },
+                        y: { grid: { color: gridColor }, ticks: { color: textColor, stepSize: 1 }, beginAtZero: true }
+                    }
+                }
+            });
+
+            // 2. User Chart
+            const userLabels = Object.keys(data.by_user);
+            const userData = Object.values(data.by_user);
+            charts.user = new Chart(document.getElementById('chart-user'), {
+                type: 'pie',
+                data: {
+                    labels: userLabels,
+                    datasets: [{
+                        data: userData,
+                        backgroundColor: palette,
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { 
+                        legend: { position: 'right', labels: { color: textColor, boxWidth: 10, font: { size: 10 } } } 
+                    }
+                }
+            });
+
+            // 3. Stacked Service Trends
+            const servicesFound = [...new Set(data.by_service_day.map(item => item.service))];
+            const datasets = servicesFound.map((svc, idx) => {
+                return {
+                    label: svc,
+                    data: rawDates.map(d => {
+                        const found = data.by_service_day.find(item => item.service === svc && item.day === d);
+                        return found ? found.count : 0;
+                    }),
+                    backgroundColor: palette[idx % palette.length]
+                };
+            });
+
+            charts.serviceStacked = new Chart(document.getElementById('chart-service-stacked'), {
+                type: 'bar',
+                data: { labels: dates, datasets: datasets },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { 
+                        legend: { position: 'top', labels: { color: textColor, boxWidth: 10, font: { size: 10 } } } 
+                    },
+                    scales: {
+                        x: { stacked: true, grid: { display: false }, ticks: { color: textColor, font: { size: 10 } } },
+                        y: { stacked: true, grid: { color: gridColor }, ticks: { color: textColor }, beginAtZero: true }
+                    }
+                }
+            });
+
+            // 4. Env Chart
+            const envLabels = Object.keys(data.by_environment);
+            const envData = Object.values(data.by_environment);
+            charts.env = new Chart(document.getElementById('chart-env'), {
+                type: 'doughnut',
+                data: {
+                    labels: envLabels,
+                    datasets: [{
+                        data: envData,
+                        backgroundColor: palette,
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { 
+                        legend: { position: 'bottom', labels: { color: textColor, boxWidth: 12, font: { size: 11 } } } 
+                    },
+                    cutout: '70%'
+                }
+            });
+
+            // 5. Total Service Chart
+            const svcLabels = Object.keys(data.by_service);
+            const svcData = Object.values(data.by_service);
+            charts.service = new Chart(document.getElementById('chart-service'), {
+                type: 'bar',
+                data: {
+                    labels: svcLabels,
+                    datasets: [{
+                        data: svcData,
+                        backgroundColor: accentColor,
+                        borderRadius: 6
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { grid: { display: false }, ticks: { color: textColor, font: { size: 10 } } },
+                        y: { grid: { color: gridColor }, ticks: { color: textColor }, beginAtZero: true }
+                    }
+                }
+            });
+        }
 
         init();
     </script>
