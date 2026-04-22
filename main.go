@@ -15,11 +15,16 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
+	"context"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/joho/godotenv"
 	"golang.org/x/crypto/ssh"
+	"os/signal"
+	"os/user"
+	"syscall"
 )
 
 // ─────────────────────────────────────────────
@@ -31,6 +36,7 @@ type Settings struct {
 	GitBashPath  string `json:"git_bash_path"`
 	WorkspaceURL string `json:"workspace_url"`
 	PreDeployCmd string `json:"pre_deploy_cmd"`
+	GoPrivate    string `json:"go_private"`
 }
 
 type Service struct {
@@ -59,6 +65,11 @@ type DeployLog struct {
 var (
 	basePath string
 	settings Settings
+
+	// Database Persistence
+	globalDB      *sql.DB
+	globalCleanup func()
+	dbMu          sync.Mutex
 )
 
 func init() {
@@ -92,6 +103,7 @@ func loadSettings() Settings {
 		GitBashPath:  `C:\Program Files\Git\bin\bash.exe`,
 		WorkspaceURL: filepath.Dir(basePath),
 		PreDeployCmd: "",
+		GoPrivate:    "gitlab.com/bship1/*",
 	}
 
 	f, err := os.Open(getSettingsPath())
@@ -117,7 +129,33 @@ func saveSettings(s Settings) error {
 // Database & SSH Logic
 // ─────────────────────────────────────────────
 
-func getDB() (*sql.DB, func(), error) {
+// getDB provides a persistent database connection
+func getDB() (*sql.DB, error) {
+	dbMu.Lock()
+	defer dbMu.Unlock()
+
+	if globalDB != nil {
+		if err := globalDB.Ping(); err == nil {
+			return globalDB, nil
+		}
+		log.Printf("[DB] Connection lost, reconnecting...")
+		if globalCleanup != nil {
+			globalCleanup()
+		}
+		globalDB.Close()
+		globalDB = nil
+	}
+
+	db, cleanup, err := createDBConnection()
+	if err != nil {
+		return nil, err
+	}
+	globalDB = db
+	globalCleanup = cleanup
+	return globalDB, nil
+}
+
+func createDBConnection() (*sql.DB, func(), error) {
 	dbHost := strings.TrimSpace(os.Getenv("MYSQL_HOST"))
 	if dbHost == "" {
 		dbHost = "localhost"
@@ -246,12 +284,12 @@ func getDB() (*sql.DB, func(), error) {
 }
 
 func logToDB(userName, serviceName, env, branch, message string) error {
-	db, cleanup, err := getDB()
+	db, err := getDB()
 	if err != nil {
 		return err
 	}
-	defer cleanup()
-	defer db.Close()
+
+	// Note: We don't close the global DB here
 
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS deployments (
@@ -297,10 +335,86 @@ func getBashPath(s Settings) string {
 	return "bash"
 }
 
-func scanServices(workspaceURL string) []Service {
+func getGitPath(s Settings) string {
+	if runtime.GOOS == "windows" {
+		if s.GitBashPath != "" {
+			// e.g. D:\Apps\Git\bin\bash.exe -> D:\Apps\Git\cmd\git.exe
+			gitPath := filepath.Join(filepath.Dir(filepath.Dir(s.GitBashPath)), "cmd", "git.exe")
+			if _, err := os.Stat(gitPath); err == nil {
+				return gitPath
+			}
+			// Fallback bin\git.exe
+			gitPath = filepath.Join(filepath.Dir(s.GitBashPath), "git.exe")
+			if _, err := os.Stat(gitPath); err == nil {
+				return gitPath
+			}
+		}
+		// Standard paths
+		standards := []string{
+			`C:\Program Files\Git\cmd\git.exe`,
+			`C:\Program Files\Git\bin\git.exe`,
+		}
+		for _, c := range standards {
+			if _, err := os.Stat(c); err == nil {
+				return c
+			}
+		}
+	}
+	return "git"
+}
+
+func ensureGitInPath(s Settings) {
+	if runtime.GOOS != "windows" {
+		return
+	}
+
+	var pathsToCheck []string
+	if s.GitBashPath != "" {
+		binDir := filepath.Dir(s.GitBashPath)
+		cmdDir := filepath.Join(filepath.Dir(binDir), "cmd")
+		pathsToCheck = append(pathsToCheck, binDir, cmdDir)
+	}
+	// Standard paths
+	pathsToCheck = append(pathsToCheck, `C:\Program Files\Git\bin`, `C:\Program Files\Git\cmd`)
+
+	currentPath := os.Getenv("PATH")
+	pathParts := filepath.SplitList(currentPath)
+	pathMap := make(map[string]bool)
+	for _, p := range pathParts {
+		pathMap[strings.ToLower(filepath.Clean(p))] = true
+	}
+
+	updated := false
+	for _, p := range pathsToCheck {
+		cleanP := filepath.Clean(p)
+		if _, err := os.Stat(cleanP); err == nil {
+			if !pathMap[strings.ToLower(cleanP)] {
+				currentPath = cleanP + string(os.PathListSeparator) + currentPath
+				pathMap[strings.ToLower(cleanP)] = true
+				updated = true
+			}
+		}
+	}
+
+	if updated {
+		os.Setenv("PATH", currentPath)
+		log.Printf("[Env] Updated PATH to ensure Git is available")
+	}
+
+	if s.GoPrivate != "" {
+		os.Setenv("GOPRIVATE", s.GoPrivate)
+		log.Printf("[Env] GOPRIVATE set to: %s", s.GoPrivate)
+	}
+}
+
+func scanServices(s Settings) []Service {
+	workspaceURL := s.WorkspaceURL
+	gitPath := getGitPath(s)
+
 	var services []Service
 	entries, err := os.ReadDir(workspaceURL)
 	if err != nil {
+		log.Printf("[Scan] Error reading workspace %s: %v", workspaceURL, err)
 		return services
 	}
 
@@ -338,17 +452,22 @@ func scanServices(workspaceURL string) []Service {
 
 		if devScript != "" || stgScript != "" {
 			branch := "unknown"
-			cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+			// Use -c safe.directory=* to avoid ownership issues when running as service
+			cmd := exec.Command(gitPath, "-c", "safe.directory=*", "rev-parse", "--abbrev-ref", "HEAD")
 			cmd.Dir = path
-			if out, err := cmd.Output(); err == nil {
+			if out, err := cmd.CombinedOutput(); err == nil {
 				branch = strings.TrimSpace(string(out))
+			} else {
+				log.Printf("[Scan] Git error (branch) in %s: %v, output: %s", entry.Name(), err, string(out))
 			}
 
 			lastCommit := ""
-			cmd = exec.Command("git", "log", "-1", "--pretty=%s")
+			cmd = exec.Command(gitPath, "-c", "safe.directory=*", "log", "-1", "--pretty=%s")
 			cmd.Dir = path
-			if out, err := cmd.Output(); err == nil {
+			if out, err := cmd.CombinedOutput(); err == nil {
 				lastCommit = strings.TrimSpace(string(out))
+			} else {
+				log.Printf("[Scan] Git error (log) in %s: %v, output: %s", entry.Name(), err, string(out))
 			}
 
 			services = append(services, Service{
@@ -390,6 +509,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		ensureGitInPath(s)
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		return
@@ -402,7 +522,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 
 func servicesHandler(w http.ResponseWriter, r *http.Request) {
 	s := loadSettings()
-	services := scanServices(s.WorkspaceURL)
+	services := scanServices(s)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(services)
 }
@@ -414,15 +534,13 @@ func historyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	db, cleanup, err := getDB()
+	db, err := getDB()
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
-	defer cleanup()
-	defer db.Close()
 
 	rows, err := db.Query(`
 		SELECT user_name, environment, branch, created_at, message 
@@ -446,7 +564,7 @@ func historyHandler(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(&l.UserName, &l.Environment, &l.Branch, &createdAt, &l.Message); err != nil {
 			continue
 		}
-		l.CreatedAt = createdAt.Format("2006-01-02 15:04:05")
+		l.CreatedAt = createdAt.Add(7 * time.Hour).Format("2006-01-02 15:04:05")
 		logs = append(logs, l)
 	}
 
@@ -466,7 +584,7 @@ func deployHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s := loadSettings()
-	services := scanServices(s.WorkspaceURL)
+	services := scanServices(s)
 
 	var svc *Service
 	for _, sv := range services {
@@ -526,6 +644,17 @@ func deployHandler(w http.ResponseWriter, r *http.Request) {
 			cmd = exec.Command("sh", "-c", s.PreDeployCmd)
 		}
 		cmd.Dir = svc.Dir
+		h, _ := os.UserHomeDir()
+		cmd.Env = append(os.Environ(),
+			"GIT_TERMINAL_PROMPT=0",
+			"GIT_SSH_COMMAND=ssh -o StrictHostKeyChecking=no",
+			"GIT_CONFIG_COUNT=1",
+			"GIT_CONFIG_KEY_0=url.git@gitlab.com:.insteadOf",
+			"GIT_CONFIG_VALUE_0=https://gitlab.com/",
+		)
+		if h != "" {
+			cmd.Env = append(cmd.Env, "HOME="+h, "USERPROFILE="+h)
+		}
 
 		stdout, _ := cmd.StdoutPipe()
 		cmd.Stderr = cmd.Stdout
@@ -552,6 +681,17 @@ func deployHandler(w http.ResponseWriter, r *http.Request) {
 
 	cmd := exec.Command(bash, scriptName, finalMsg)
 	cmd.Dir = scriptDir
+	h, _ := os.UserHomeDir()
+	cmd.Env = append(os.Environ(),
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_SSH_COMMAND=ssh -o StrictHostKeyChecking=no",
+		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_KEY_0=url.git@gitlab.com:.insteadOf",
+		"GIT_CONFIG_VALUE_0=https://gitlab.com/",
+	)
+	if h != "" {
+		cmd.Env = append(cmd.Env, "HOME="+h, "USERPROFILE="+h)
+	}
 	stdout, _ := cmd.StdoutPipe()
 	cmd.Stderr = cmd.Stdout
 
@@ -583,6 +723,32 @@ func deployHandler(w http.ResponseWriter, r *http.Request) {
 // ─────────────────────────────────────────────
 
 func main() {
+	s := loadSettings()
+	ensureGitInPath(s)
+
+	u, _ := user.Current()
+	h, _ := os.UserHomeDir()
+	log.Printf("[Init] Running as user: %s (UID: %s), Home: %s", u.Username, u.Uid, h)
+
+	// Pre-init DB connection to check config
+	go func() {
+		if _, err := getDB(); err != nil {
+			log.Printf("[Init] DB/SSH Warning: %v", err)
+		}
+	}()
+
+	defer func() {
+		dbMu.Lock()
+		if globalDB != nil {
+			log.Printf("[Main] Closing global DB connection")
+			globalDB.Close()
+		}
+		if globalCleanup != nil {
+			globalCleanup()
+		}
+		dbMu.Unlock()
+	}()
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /", indexHandler)
@@ -603,6 +769,31 @@ func main() {
 		port = "5000"
 	}
 
-	fmt.Printf("Server starting on http://localhost:%s\n", port)
-	log.Fatal(http.ListenAndServe(":"+port, mux))
+	srv := &http.Server{
+		Addr:    ":" + port,
+		Handler: mux,
+	}
+
+	go func() {
+		fmt.Printf("Server starting on http://localhost:%s\n", port)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("listen: %s\n", err)
+		}
+	}()
+
+	// Wait for interrupt signal to gracefully shutdown the server
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	log.Println("[Main] Shutting down server...")
+
+	// Create a context with timeout for the shutdown
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Printf("[Main] Server forced to shutdown: %v", err)
+	}
+
+	log.Println("[Main] Server exiting")
 }

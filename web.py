@@ -17,6 +17,10 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app)
 
+# Persistent DB/SSH globals
+_GLOBAL_CONN = None
+_GLOBAL_TUNNEL = None
+
 # ─────────────────────────────────────────────
 if getattr(sys, 'frozen', False):
     BASE_PATH = Path(sys.executable).parent
@@ -81,7 +85,7 @@ def scan_services(workspace_url):
             try:
                 cf = dict(creationflags=subprocess.CREATE_NO_WINDOW) if os.name == "nt" else {}
                 branch = subprocess.check_output(
-                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                    ["git", "-c", "safe.directory=*", "rev-parse", "--abbrev-ref", "HEAD"],
                     cwd=str(d), text=True, stderr=subprocess.STDOUT, **cf
                 ).strip()
             except Exception:
@@ -91,7 +95,7 @@ def scan_services(workspace_url):
             commit_msg = ""
             try:
                 commit_msg = subprocess.check_output(
-                    ["git", "log", "-1", "--pretty=%s"],
+                    ["git", "-c", "safe.directory=*", "log", "-1", "--pretty=%s"],
                     cwd=str(d), text=True, stderr=subprocess.STDOUT, **cf
                 ).strip()
             except Exception:
@@ -110,7 +114,20 @@ def scan_services(workspace_url):
     return services
 
 def get_db_conn():
-    """Helper for MySQL connection with optional SSH tunnel using ENV vars."""
+    """Helper for MySQL connection with optional SSH tunnel using ENV vars (Persistent)."""
+    global _GLOBAL_CONN, _GLOBAL_TUNNEL
+    
+    if _GLOBAL_CONN:
+        try:
+            _GLOBAL_CONN.ping(reconnect=True)
+            return _GLOBAL_CONN
+        except:
+            if _GLOBAL_TUNNEL:
+                try: _GLOBAL_TUNNEL.stop()
+                except: pass
+            _GLOBAL_CONN = None
+            _GLOBAL_TUNNEL = None
+
     db_host = os.getenv("MYSQL_HOST", "localhost")
     db_user = os.getenv("MYSQL_USER", "root")
     db_pwd  = os.getenv("MYSQL_PASSWORD", "")
@@ -128,27 +145,26 @@ def get_db_conn():
         ssh_pwd  = os.getenv("SSH_PASSWORD")
         
         if ssh_host and ssh_user:
-            tunnel = SSHTunnelForwarder(
+            _GLOBAL_TUNNEL = SSHTunnelForwarder(
                 (ssh_host, ssh_port),
                 ssh_username=ssh_user,
                 ssh_password=ssh_pwd if not ssh_key else None,
                 ssh_pkey=ssh_key if ssh_key else None,
                 remote_bind_address=(db_host, db_port)
             )
-            tunnel.start()
+            _GLOBAL_TUNNEL.start()
             
-            conn = pymysql.connect(
+            _GLOBAL_CONN = pymysql.connect(
                 host='127.0.0.1',
-                port=tunnel.local_bind_port,
+                port=_GLOBAL_TUNNEL.local_bind_port,
                 user=db_user,
                 password=db_pwd,
                 database=db_name,
                 cursorclass=pymysql.cursors.DictCursor
             )
-            conn.ssh_tunnel = tunnel
-            return conn
+            return _GLOBAL_CONN
 
-    return pymysql.connect(
+    _GLOBAL_CONN = pymysql.connect(
         host=db_host,
         port=db_port,
         user=db_user,
@@ -156,6 +172,7 @@ def get_db_conn():
         database=db_name,
         cursorclass=pymysql.cursors.DictCursor
     )
+    return _GLOBAL_CONN
 
 def log_to_mysql(user_name, service_name, env, branch, message):
     conn = None
@@ -186,10 +203,7 @@ def log_to_mysql(user_name, service_name, env, branch, message):
         print(f"MySQL Error: {err_msg}")
         return False, err_msg
     finally:
-        if conn:
-            conn.close()
-            if hasattr(conn, 'ssh_tunnel'):
-                conn.ssh_tunnel.stop()
+        pass
 
 # ─────────────────────────────────────────────
 #  API Endpoints
@@ -237,16 +251,13 @@ def history_api(service_name):
             """, (service_name,))
             rows = cur.fetchall()
             for r in rows:
-                r['created_at'] = r['created_at'].strftime("%Y-%m-%d %H:%M:%S")
+                r['created_at'] = (r['created_at'] + datetime.timedelta(hours=7)).strftime("%Y-%m-%d %H:%M:%S")
         return jsonify(rows)
     except Exception as e:
         print(f"History API Error: {e}")
         return jsonify({"error": str(e)}), 500
     finally:
-        if conn:
-            conn.close()
-            if hasattr(conn, 'ssh_tunnel'):
-                conn.ssh_tunnel.stop()
+        pass
 
 @app.route("/api/deploy", methods=["POST"])
 def deploy_api():

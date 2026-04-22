@@ -30,7 +30,9 @@ deploy-tool/
 - **Premium UI**: Modern dark-mode interface with glassmorphism effects, rhythmic animations, and responsive design.
 - **Real-time Logging**: Uses Server-Sent Events (SSE) to stream deployment logs directly to your browser.
 - **Service Scanning**: Automatically detects services in your workspace containing `deploy-dev.sh` or `deploy-stg.sh`.
-- **SSH Tunnel Support**: Connect to remote MySQL databases securely via SSH tunnels (built into both Go and Python versions).
+- **Persistent DB/SSH Connection**: Optimized connection management with built-in auto-reconnect and SSH tunnel pooling (available in Go and Python).
+- **Service-Ready**: Enhanced compatibility for running as a Windows Service (NSSM), including automatic path detection and Git ownership fix (`safe.directory`).
+- **Auto Timezone Adjustment**: Automatically displays history in local timezone (GMT+7).
 - **Deployment History**: Tracks every deployment action in MySQL with branch info, user names, and commit messages.
 
 ## 📋 Prerequisites
@@ -43,24 +45,9 @@ deploy-tool/
 ## 🚀 Getting Started
 
 ### 1. Configure Environment
-Create a `.env` file from `.env.example`:
-```env
-# APP_ENV: 'local' (enables SSH tunnel) or 'server'
-APP_ENV=local
-
-MYSQL_HOST=localhost
-MYSQL_PORT=3306
-MYSQL_USER=your_user
-MYSQL_PASSWORD=your_password
-MYSQL_DB=deploy_logs
-
-# SSH Tunnel Configuration
-USE_SSH=true
-SSH_HOST=your_server_ip
-SSH_PORT=22
-SSH_USER=ubuntu
-SSH_KEY_PATH=C:/Users/YourUser/.ssh/id_rsa
-```
+Create a `.env` file from `.env.example`. 
+> [!TIP]
+> Use absolute paths for `SSH_KEY_PATH` to ensure reliability when running as a service.
 
 ### 2. Run the Application
 
@@ -75,7 +62,6 @@ Visit `http://localhost:5000`
 ```powershell
 .\scripts\run_web.bat
 ```
-Visit `http://localhost:5000`
 
 #### Option C: Desktop App (Python)
 ```powershell
@@ -86,30 +72,25 @@ python app.py
 
 - **Workspace Directory**: Set this in the Web UI **Settings**. This is the root folder containing your services.
 - **Pre-deploy Command**: Configure a command (like `go mod tidy` or `npm install`) to run before the main deployment script.
-- **SSH Protocol**: Built-in support for both SSH Password and Private Key authentication.
+- **Git Ownership**: The tool automatically uses `-c safe.directory=*` for Git commands to prevent environment-related permission issues.
 
 ## 🖥️ Running as a Windows Service (NSSM)
 
-To ensure the Deployment Tool runs in the background and starts automatically with Windows, you can use **NSSM**:
+To ensure the Tool runs in the background and starts automatically, you can use **NSSM**:
 
 1. **Build the executable**:
    ```powershell
-   go build -o app.exe main.go
+   go build -o IDS.exe main.go
    ```
-2. **Download NSSM**: Get it from [nssm.cc](https://nssm.cc/download).
-3. **Install the Service**:
-   Open PowerShell/CMD as **Administrator** and run:
+2. **Install the Service**:
+   Open PowerShell as **Administrator**:
    ```powershell
-   path\to\nssm.exe install IDS-Commander
+   nssm install IDS-Commander
    ```
-4. **Configure in GUI**:
-   - **Path**: Select your built `app.exe`.
+3. **Configure correctly**:
+   - **Path**: Path to `IDS.exe`.
    - **Startup directory**: Your project root folder.
-   - **Details Tab**: Set the Display Name (e.g., `IDS Deploy Tool`).
-5. **Manage Service**:
-   - **Start**: `nssm start IDS-Commander`
-   - **Edit**: `nssm edit IDS-Commander`
-   - **Remove**: `nssm remove IDS-Commander`
+   - **Log on Tab (IMPORTANT)**: Choose **"This account"** and enter your Windows credentials. This solves 90% of Git/SSH environment issues when running as a service.
 
 ## 📄 License
 

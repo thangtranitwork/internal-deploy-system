@@ -15,6 +15,10 @@ from tkinter import filedialog
 
 load_dotenv()
 
+# Persistent DB/SSH globals
+_GLOBAL_CONN = None
+_GLOBAL_TUNNEL = None
+
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
@@ -139,7 +143,7 @@ class HistoryWindow(ctk.CTkToplevel):
                 f = ctk.CTkFrame(self.table_frame, fg_color="#161b22")
                 f.pack(fill="x", pady=4, padx=5)
                 
-                time_str = r['created_at'].strftime("%H:%M %d/%m/%Y")
+                time_str = (r['created_at'] + datetime.timedelta(hours=7)).strftime("%H:%M %d/%m/%Y")
                 title = f"{time_str} | User: {r['user_name']} | Env: {r['environment']} | Branch: {r['branch']}"
                 
                 ctk.CTkLabel(f, text=title, font=ctk.CTkFont(weight="bold", size=12), text_color="#58a6ff").pack(anchor="w", padx=12, pady=(8, 2))
@@ -148,10 +152,7 @@ class HistoryWindow(ctk.CTkToplevel):
         except Exception as e:
             ctk.CTkLabel(self.table_frame, text=f"Error loading history: {e}", text_color="red").pack(pady=20)
         finally:
-            if conn:
-                conn.close()
-                if hasattr(conn, 'ssh_tunnel'):
-                    conn.ssh_tunnel.stop()
+            pass
 
 
 # ─────────────────────────────────────────────
@@ -463,7 +464,7 @@ class DeployApp(ctk.CTk):
         # Branch
         try:
             out = subprocess.check_output(
-                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                ["git", "-c", "safe.directory=*", "rev-parse", "--abbrev-ref", "HEAD"],
                 cwd=svc["dir"], text=True, stderr=subprocess.STDOUT, **cf
             )
             self.current_branch = out.strip()
@@ -474,7 +475,7 @@ class DeployApp(ctk.CTk):
         # Auto-fill latest commit message
         try:
             commit_msg = subprocess.check_output(
-                ["git", "log", "-1", "--pretty=%s"],
+                ["git", "-c", "safe.directory=*", "log", "-1", "--pretty=%s"],
                 cwd=svc["dir"], text=True, stderr=subprocess.STDOUT, **cf
             ).strip()
             self.entry_msg.delete(0, "end")
@@ -487,7 +488,20 @@ class DeployApp(ctk.CTk):
         self._refresh_last_deploy_info()
 
     def _get_db_conn(self):
-        """Helper to get MySQL connection, optionally via SSH tunnel using ENV vars."""
+        """Helper to get MySQL connection, optionally via SSH tunnel using ENV vars (Persistent)."""
+        global _GLOBAL_CONN, _GLOBAL_TUNNEL
+        
+        if _GLOBAL_CONN:
+            try:
+                _GLOBAL_CONN.ping(reconnect=True)
+                return _GLOBAL_CONN
+            except:
+                if _GLOBAL_TUNNEL:
+                    try: _GLOBAL_TUNNEL.stop()
+                    except: pass
+                _GLOBAL_CONN = None
+                _GLOBAL_TUNNEL = None
+
         db_host = os.getenv("MYSQL_HOST", "localhost")
         db_user = os.getenv("MYSQL_USER", "root")
         db_pwd  = os.getenv("MYSQL_PASSWORD", "")
@@ -504,31 +518,27 @@ class DeployApp(ctk.CTk):
             ssh_key  = os.getenv("SSH_KEY_PATH")
             ssh_pwd  = os.getenv("SSH_PASSWORD")
             
-            if not ssh_host or not ssh_user:
-                # If SSH is missing in ENV while in local, try direct connect as fallback or log error
-                pass 
-            else:
-                tunnel = SSHTunnelForwarder(
+            if ssh_host and ssh_user:
+                _GLOBAL_TUNNEL = SSHTunnelForwarder(
                     (ssh_host, ssh_port),
                     ssh_username=ssh_user,
                     ssh_password=ssh_pwd if not ssh_key else None,
                     ssh_pkey=ssh_key if ssh_key else None,
                     remote_bind_address=(db_host, db_port)
                 )
-                tunnel.start()
+                _GLOBAL_TUNNEL.start()
                 
-                conn = pymysql.connect(
+                _GLOBAL_CONN = pymysql.connect(
                     host='127.0.0.1',
-                    port=tunnel.local_bind_port,
+                    port=_GLOBAL_TUNNEL.local_bind_port,
                     user=db_user,
                     password=db_pwd,
                     database=db_name,
                     cursorclass=pymysql.cursors.DictCursor
                 )
-                conn.ssh_tunnel = tunnel
-                return conn
+                return _GLOBAL_CONN
 
-        return pymysql.connect(
+        _GLOBAL_CONN = pymysql.connect(
             host=db_host,
             port=db_port,
             user=db_user,
@@ -536,6 +546,7 @@ class DeployApp(ctk.CTk):
             database=db_name,
             cursorclass=pymysql.cursors.DictCursor
         )
+        return _GLOBAL_CONN
 
     def _refresh_last_deploy_info(self):
         svc = self._get_selected_service()
@@ -558,7 +569,7 @@ class DeployApp(ctk.CTk):
                     row = cur.fetchone()
 
                 if row:
-                    time_str = row['created_at'].strftime("%H:%M %d/%m")
+                    time_str = (row['created_at'] + datetime.timedelta(hours=7)).strftime("%H:%M %d/%m")
                     msg = row['message']
                     if len(msg) > 40: msg = msg[:37] + "..."
                     info = f"Last: {time_str} by {row['user_name']} | {row['environment']} | {row['branch']} | {msg}"
@@ -571,10 +582,7 @@ class DeployApp(ctk.CTk):
                 print(f"DB Error: {e}")
                 self.after(0, lambda: self.lbl_last_deploy.configure(text="Last deploy: (db error)"))
             finally:
-                if conn:
-                    conn.close()
-                    if hasattr(conn, 'ssh_tunnel'):
-                        conn.ssh_tunnel.stop()
+                pass
 
         threading.Thread(target=task, daemon=True).start()
 
@@ -696,10 +704,7 @@ class DeployApp(ctk.CTk):
                     err_msg += " (Note: Do not use .pub file, use the Private Key file)"
                 self.after(0, self.append_terminal, f"\n[MySQL] Error: {err_msg}\n")
             finally:
-                if conn:
-                    conn.close()
-                    if hasattr(conn, 'ssh_tunnel'):
-                        conn.ssh_tunnel.stop()
+                pass
 
         def task():
             try:
