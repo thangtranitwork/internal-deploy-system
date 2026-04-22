@@ -37,6 +37,7 @@ type Settings struct {
 	WorkspaceURL string `json:"workspace_url"`
 	PreDeployCmd string `json:"pre_deploy_cmd"`
 	GoPrivate    string `json:"go_private"`
+	AccentColor  string `json:"accent_color"`
 }
 
 type Service struct {
@@ -104,6 +105,7 @@ func loadSettings() Settings {
 		WorkspaceURL: filepath.Dir(basePath),
 		PreDeployCmd: "",
 		GoPrivate:    "gitlab.com/bship1/*",
+		AccentColor:  "#f85149", // Default GitHub Red
 	}
 
 	f, err := os.Open(getSettingsPath())
