@@ -45,6 +45,7 @@ deploy-tool/
 - **Python 3.8+** (For Python/Desktop version)
 - **MySQL Server** (Remote or Local)
 - **Git Bash** (Required for Windows users to execute `.sh` scripts)
+- **Ubuntu/Linux Support**: Fully supported natively. The tool will automatically use system `bash` and `git` without requiring any extra configuration.
 
 ## 🚀 Getting Started
 
